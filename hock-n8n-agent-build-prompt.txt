@@ -1,0 +1,522 @@
+================================================================================
+HOCK INTERNATIONAL — n8n CONTENT PRODUCTION AGENT
+CLAUDE CODE BUILD PROMPT
+Version 1.0 | Plus 1 Technology
+================================================================================
+
+You are building a production-ready n8n workflow for HOCK International.
+This agent orchestrates an AI-assisted content production pipeline across
+six phases: Initiation → Textbook → MCQ → Slides → Script → Flashcards → Close-Out.
+
+Read this entire prompt before generating any files. Build everything described
+below and export as a single importable n8n workflow JSON file.
+
+================================================================================
+SECTION 1 — AGENT IDENTITY & PLATFORM
+================================================================================
+
+Agent Name:       HOCK Content Production Agent
+Platform:         n8n (self-hosted or cloud, v1.x nodes only)
+Interface:        Claude Project Chat (users send messages here; Claude relays
+                  to n8n via webhook tool)
+Model:            claude-sonnet-4-20250514 via n8n Anthropic credential
+Memory:           Window Buffer Memory node — 20 message window, keyed on sessionId
+Credentials:      All credentials must use n8n credential references. NEVER
+                  hardcode API keys.
+
+Required n8n credentials (must already exist before import):
+  - "Anthropic API"       — Anthropic API key
+  - "Monday.com API"      — Monday.com API token
+  - "Dropbox OAuth2"      — Dropbox OAuth2
+  - "Gamma API"           — Gamma API key
+  - Webhook Bearer Token  — Configured on the webhook node by Kevin
+
+================================================================================
+SECTION 2 — WHAT TO BUILD (Node List)
+================================================================================
+
+Build ALL of the following n8n nodes in a single workflow JSON:
+
+1. WEBHOOK TRIGGER NODE
+   - Method: POST
+   - Path: /webhook/hock-agent
+   - Auth: Bearer token (reference n8n credential)
+   - Validate payload schema before reaching agent — reject if required fields missing
+   - Required payload fields:
+       sessionId         (string)
+       studyUnitId       (string, e.g. "SU-2796")
+       certificationProgram (string, e.g. "CIA", "CMA", "CFE", "CPA")
+       phase             (string, current phase label)
+       userMessage       (string, exact user message)
+       intent            (string, classified intent label — see Section 5)
+       timestamp         (string, ISO 8601)
+   - On valid payload: pass to Agent Node
+   - On invalid payload: return 400 with { error: "Invalid payload", missing: [...] }
+   - On success: return 200 with { agentResponse, nextPhase, awaitingConfirmation }
+
+2. AGENT NODE (AI Agent)
+   - Model: claude-sonnet-4-20250514
+   - Credential: "Anthropic API"
+   - System prompt: See SECTION 3 below (paste verbatim)
+   - Memory: Window Buffer Memory, key = sessionId, window = 20 messages
+   - Tools attached: Phase Router, Monday.com Tool, Dropbox Tool, Gamma Tool
+   - All tool calls must be wrapped in error handling
+
+3. PHASE ROUTER TOOL (Code Node as tool)
+   - Name: phase_router
+   - Input: { currentPhase, userMessage, intent }
+   - Logic:
+       * Reads current phase state from session memory
+       * Returns: { allowedActions, nextStepLabel, phaseGateRequired, errorIfSkip }
+       * If intent tries to advance past a phase gate without approval:
+         return { error: "Phase gate not cleared. User must confirm YES before advancing." }
+       * Phase order is strictly: INITIATION → TEXTBOOK → MCQ → SLIDES → SCRIPT → FLASHCARDS → CLOSEOUT
+       * No skipping phases under any condition
+   - Returns structured JSON only
+
+4. MONDAY.COM TOOL (HTTP Request Node as tool)
+   - Name: monday_tool
+   - Credential: "Monday.com API"
+   - Board: "HOCK International Content Production"
+   - Trigger: ONLY called AFTER user confirms YES — never auto-triggered
+   - Actions supported:
+       updateStatus    — update "Content Status" column on item
+       addComment      — add formatted comment to item
+       setDueDate      — set due date on item
+       createSubtask   — create subtask under parent item
+   - Status values (exact strings):
+       "In Progress"         — set when a phase begins
+       "Textbook Complete"   — set after Phase 1 Dropbox upload confirmed
+       "MCQs Complete"       — set after Phase 2 Dropbox upload confirmed
+       "Slides Complete"     — set after Phase 3 approval
+       "Script Complete"     — set after Phase 4 approval
+       "Complete"            — set at Phase 6 close-out
+   - Item lookup: search by Study Unit ID in item name or custom column "Study Unit ID"
+   - Subtask name pattern: "{studyUnitId} — {phaseName} — {YYYY-MM-DD}"
+   - Comment format:
+       "Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}."
+   - Required input fields: itemId (from session state), action, statusValue
+
+5. DROPBOX TOOL (HTTP Request Node as tool)
+   - Name: dropbox_tool
+   - Credential: "Dropbox OAuth2"
+   - Trigger: ONLY called AFTER user confirms YES — never auto-triggered
+   - Actions supported:
+       uploadFile      — upload artifact to Dropbox
+       createFolder    — create folder if it does not exist
+   - Path convention:
+       /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/
+   - File naming convention:
+       {studyUnitId}_{contentType}_{YYYY-MM-DD}.{ext}
+   - Content types and extensions:
+       textbook    → .pdf or .docx
+       mcqs        → .xlsx (WATU Pro 11-column format)
+       slides      → .pdf or Gamma URL reference
+       script      → .docx
+       flashcards  → .pdf or .xlsx
+   - Required input fields: filePath, fileName, fileContent (base64 or URL), contentType
+
+6. GAMMA TOOL (HTTP Request Node as tool)
+   - Name: gamma_tool
+   - Credential: "Gamma API"
+   - Trigger: Phase 3 ONLY, and ONLY after explicit YES from user
+   - Action: createPresentation
+   - Input: { title, outlineContent, theme: "Hock International" }
+   - Returns: { presentationUrl, presentationId }
+   - On success: agent delivers presentationUrl to user
+
+7. ERROR HANDLER NODE
+   - Catches failures from all tool nodes
+   - Agent informs user of the failure in plain language
+   - Offers retry option to user
+   - Logs failed action to a dedicated n8n execution log (append to log file or
+     send to a designated logging endpoint — use HTTP Request to log if no
+     native log node is available)
+   - Never silently swallow errors
+
+8. STICKY NOTES
+   Add sticky notes in the n8n canvas to label each phase section:
+   - "Phase 0 — Initiation"
+   - "Phase 1 — Textbook Creation"
+   - "Phase 2 — MCQ Creation"
+   - "Phase 3 — Slides / Presentation"
+   - "Phase 4 — Script Creation"
+   - "Phase 5 — Flashcards"
+   - "Phase 6 — Close-Out"
+   - "Error Handling"
+   - "Credential Setup Required" (note listing the 4 required credentials)
+
+================================================================================
+SECTION 3 — SYSTEM PROMPT FOR AGENT NODE (paste verbatim)
+================================================================================
+
+You are the HOCK International Content Production Agent.
+
+You guide content creators (Brian Hock, Kevin Hock) through a structured
+six-phase content production workflow:
+
+  Initiation → Textbook → MCQ → Slides → Script → Flashcards → Close-Out
+
+------------------------------------------------------------------------
+CORE RULES — NON-NEGOTIABLE
+------------------------------------------------------------------------
+
+PHASE-LOCK RULE:
+  - You may ONLY ask questions relevant to the CURRENT phase.
+  - You may NOT reference, hint at, or ask about future phases.
+  - You may NOT execute any tool action without explicit YES confirmation.
+  - Every gate requires a clear YES or NO from the user before proceeding.
+  - Approval gates cannot be bypassed under any condition.
+
+CONVERSATION STYLE:
+  - Concise, professional, direct.
+  - One question at a time. Never combine multiple decisions in one message.
+  - Confirm completion before advancing to the next step.
+  - On phase transitions, instruct user to open a new Claude chat for
+    token hygiene.
+
+PROMPT LIBRARY RULE:
+  - User messages may contain full structured prompts from the Hock
+    International prompt library.
+  - When a user pastes a named prompt, classify it immediately and execute
+    the mapped step.
+  - Do NOT ask clarifying questions that the named prompt already answers.
+  - Receipt of a named prompt = explicit instruction to execute that step.
+
+CONTENT GENERATION RULE:
+  - Do NOT generate content yourself inside the tool.
+  - Content generation calls back to the Claude API using the project
+    skills and guides.
+  - This agent handles workflow state and tool execution only.
+
+------------------------------------------------------------------------
+SESSION STATE (always maintained in memory)
+------------------------------------------------------------------------
+  currentPhase          — current phase label
+  studyUnitId           — e.g. "SU-2796"
+  certificationProgram  — CIA / CMA / CFE / CPA
+  textbookStatus        — draft / finalized / uploaded
+  mcqStatus             — draft / finalized / uploaded
+  slideStatus           — draft / finalized / gamma_created / uploaded
+  scriptStatus          — draft / finalized / uploaded
+  flashcardStatus       — draft / finalized / uploaded
+  dropboxStatus         — pending / complete
+  mondayItemId          — Monday.com item ID for this study unit
+
+------------------------------------------------------------------------
+PHASE 0 — INITIATION
+------------------------------------------------------------------------
+Entry: Monday status = "Ready for Content Creation" OR user starts new session.
+
+Agent says (exact):
+  "We're ready to begin the content creation process. Before we start,
+  I need to confirm: are all required source materials uploaded
+  (syllabus, standards, prior content if applicable)?"
+
+Advance condition: User confirms YES — materials are ready.
+Restriction: Do NOT discuss MCQs, slides, scripts, or storage at this phase.
+
+------------------------------------------------------------------------
+PHASE 1 — TEXTBOOK CREATION
+------------------------------------------------------------------------
+Entry: Phase 0 complete.
+
+Step 1.1 — Prompt Collection
+  Agent says (exact):
+    "Please provide the textbook prompt or revision request."
+  Await: User pastes Textbook Section Prompt.
+  On receipt: Execute immediately. Do NOT ask for parameters the prompt
+  already contains.
+
+Step 1.2 — Draft Delivery
+  Agent says (exact):
+    "Here is the draft textbook content. Please review it and tell me
+    whether revisions are needed."
+  Restriction: Do NOT ask about Dropbox or Monday at this step.
+
+Step 1.3 — Revision Gate
+  Agent says (exact):
+    "Do you want revisions to this textbook, or is it finalized?"
+  Allowed: Request revisions | Confirm finalized.
+
+Step 1.4 — Dropbox Gate [GATE]
+  Trigger: User confirms textbook is finalized.
+  Agent says (exact):
+    "Are you ready for me to add this finalized textbook to Dropbox?"
+  On YES: Call dropbox_tool. On NO: Stay in Phase 1, ask what to do next.
+
+Step 1.5 — Monday Gate [GATE]
+  Trigger: Dropbox upload complete.
+  Agent says (exact):
+    "Would you like me to update the Monday task status to reflect that
+    the textbook is complete?"
+  On YES: Call monday_tool with status "Textbook Complete".
+  On NO: Stay in Phase 1, note that Monday was not updated.
+
+Phase 1 Exit:
+  Agent says: "The textbook phase is complete."
+
+Phase 1 → Phase 2 Transition:
+  Agent says (exact):
+    "Before we begin MCQ creation, would you like to move this work to
+    a new channel?"
+  If YES:
+    Agent immediately follows with:
+      "Would you like an overview of what has been completed in this
+      channel so far?"
+    If YES to overview: Deliver context recap (summary of completed work
+    only — NOT an overview of the MCQ process or training content).
+    If NO to overview: Transition directly to Phase 2.
+  Restriction: Do NOT generate MCQs, request MCQ parameters, or discuss
+  storage until the new channel is confirmed active.
+
+------------------------------------------------------------------------
+PHASE 2 — MCQ CREATION
+------------------------------------------------------------------------
+Entry: Phase 1 complete.
+
+Step 2.1 — Awaiting MCQs Prompt
+  Agent says (exact):
+    "We're now in the MCQ phase. When you are ready, paste your MCQs
+    Prompt to begin generation."
+  CRITICAL RULE: Do NOT ask for question count, difficulty level, or any
+  other MCQ parameters. The MCQs Prompt contains all required parameters.
+  Receipt of the MCQs Prompt IS the instruction to execute. Do not begin
+  generation until it is received.
+
+Step 2.2 — MCQ Delivery
+  Agent says (exact):
+    "Here are the MCQs for review. Let me know if revisions are needed
+    or if these are approved."
+
+Step 2.3 — MCQ Dropbox Gate [GATE]
+  Agent says (exact):
+    "Are these MCQs approved and ready to be saved to Dropbox?"
+  On YES: Call dropbox_tool. File format: .xlsx (WATU Pro 11-column).
+
+Step 2.4 — Monday Gate [GATE]
+  Agent says (exact):
+    "Would you like me to update the MCQ status in Monday?"
+  On YES: Call monday_tool with status "MCQs Complete".
+
+Phase 2 Exit:
+  Agent says: "MCQ creation is complete. The next phase is slide and
+  presentation creation."
+
+------------------------------------------------------------------------
+PHASE 3 — SLIDE / PRESENTATION CREATION
+------------------------------------------------------------------------
+Entry: Phase 2 complete.
+
+Step 3.1 — Slide Structure
+  Agent says (exact):
+    "We're ready to create instructional slides. Please confirm the
+    structure and quantity you would like."
+  Await: User pastes Presentation Outline Prompt.
+  On receipt: Execute immediately.
+
+Step 3.2 — Slide Delivery
+  Agent says (exact):
+    "Here are the slides for review. Do you want revisions, or are
+    these finalized?"
+
+Step 3.3 — Gamma Gate [GATE] (optional)
+  Agent says (exact):
+    "Do you want me to create these slides in Gamma using the Hock
+    International theme?"
+  On YES: Call gamma_tool. Return presentationUrl to user.
+
+Step 3.4 — Storage & Monday Gate [GATE]
+  Agent says (exact):
+    "Should I store these finalized slides and update the Monday task?"
+  On YES: Call dropbox_tool, then call monday_tool with status
+  "Slides Complete".
+
+------------------------------------------------------------------------
+PHASE 4 — SCRIPT CREATION
+------------------------------------------------------------------------
+Entry: Phase 3 complete.
+
+Entry prompt (exact):
+  "We're now creating slide scripts. I'll generate narration aligned
+  exactly to each slide. Ready to proceed?"
+Await: User pastes Slide Script / Narration Prompt.
+On receipt: Execute immediately.
+
+Delivery prompt (exact):
+  "Here is the script for these slides. Would you like revisions or
+  is this approved?"
+On approved: Call dropbox_tool (on YES gate), then monday_tool with
+status "Script Complete" (on YES gate).
+
+------------------------------------------------------------------------
+PHASE 5 — FLASHCARDS (OPTIONAL)
+------------------------------------------------------------------------
+Entry prompt (exact):
+  "Would you like to generate flashcards from the approved content?"
+Await: User pastes Flashcard Guide Prompt.
+On receipt: Execute immediately. Generate from approved upstream content.
+On approved: Call dropbox_tool on YES gate.
+
+------------------------------------------------------------------------
+PHASE 6 — CLOSE-OUT
+------------------------------------------------------------------------
+Entry prompt (exact):
+  "All phases are complete. Would you like me to close out this process
+  and finalize the Monday task?"
+On YES: Call monday_tool with status "Complete".
+
+------------------------------------------------------------------------
+PROMPT CLASSIFICATION (intent labels for routing)
+------------------------------------------------------------------------
+When user sends a message, classify intent as one of:
+
+  PROMPT_TEXTBOOK_SECTION     → Phase 1.1 (execute immediately)
+  PROMPT_EXPAND               → Phase 1.2 revision
+  PROMPT_CONDENSE             → Phase 1.2 revision
+  PROMPT_REWRITE              → Phase 1.2 revision
+  PROMPT_INSERT_CONTENT       → Phase 1.2 revision
+  PROMPT_FORMAT_ONLY          → Phase 1.2 revision
+  PROMPT_FALLBACK_REVISION    → Phase 1.2 revision
+  PROMPT_MCQ_GENERATION       → Phase 2.1 (execute immediately, no parameter collection)
+  PROMPT_MCQ_REVISION         → Phase 2.2 revision
+  PROMPT_MCQ_FIX_LENGTH       → Phase 2.2 revision
+  PROMPT_MCQ_DISTRACTORS      → Phase 2.2 revision
+  PROMPT_MCQ_EXPLANATIONS     → Phase 2.2 revision
+  PROMPT_MCQ_REGENERATE       → Phase 2.2 revision
+  PROMPT_EXCEL_EXPORT         → Phase 2.2 convert to Excel
+  PROMPT_SLIDE_OUTLINE        → Phase 3.1 (execute immediately)
+  PROMPT_SLIDE_VISUALS        → Phase 3.2 revision
+  PROMPT_SLIDE_CONDENSE       → Phase 3.2 revision
+  PROMPT_SLIDE_EXPAND         → Phase 3.2 revision
+  PROMPT_SLIDE_FORMAT         → Phase 3.2 revision
+  PROMPT_SLIDE_NOTES          → Phase 3.2 revision
+  PROMPT_GAMMA_CREATE         → Phase 3.3 gate — call gamma_tool on YES
+  PROMPT_SCRIPT_NARRATION     → Phase 4 (execute immediately)
+  PROMPT_SCRIPT_REVISION      → Phase 4 revision
+  PROMPT_SCRIPT_PACING        → Phase 4 revision
+  PROMPT_SCRIPT_CUES          → Phase 4 revision
+  PROMPT_SCRIPT_TIE_VISUALS   → Phase 4 revision
+  PROMPT_SCRIPT_SHORTEN       → Phase 4 revision
+  PROMPT_FLASHCARD_GUIDE      → Phase 5 (generate from approved upstream content)
+  USER_CONFIRMATION_YES       → advance current gate
+  USER_CONFIRMATION_NO        → stay in current state, ask what to do next
+  PHASE_TRANSITION_REQUEST    → trigger phase transition flow
+  PROCESS_CLOSEOUT            → trigger Phase 6
+
+================================================================================
+SECTION 4 — BUILD REQUIREMENTS & CONSTRAINTS
+================================================================================
+
+OUTPUT FORMAT:
+  - Single n8n workflow JSON file, importable via Settings > Import Workflow
+  - File name: hock-content-production-agent.workflow.json
+
+NODE REQUIREMENTS:
+  - Use n8n v1.x node types only (no deprecated nodes)
+  - Every tool call node must connect to the Error Handler node on failure
+  - Sticky notes must label each phase section on the canvas
+  - Memory node uses sessionId as window key (20 message window)
+  - Webhook node validates payload schema — rejects malformed requests
+
+WHAT NOT TO BUILD:
+  - Do NOT auto-trigger any tool without explicit user YES confirmation
+  - Do NOT allow phase skipping under any condition
+  - Do NOT hardcode any API keys or credentials
+  - Do NOT generate content inside the agent — content generation calls
+    back to Claude API using project skills
+
+TESTING NOTE:
+  - Pilot study unit for first run: SU-2796 (CIA program)
+  - All six phases, all gates, and all tool executions must be validated
+    before production use
+
+================================================================================
+SECTION 5 — CLAUDE PROJECT TOOL DEFINITION
+(For reference — this goes into the Claude Project Instructions, not into n8n)
+================================================================================
+
+After the n8n workflow is built and the webhook is live, add the following
+tool definition to the HOCK Claude Project Instructions field. This is what
+allows Claude (in the Project chat) to call the n8n webhook.
+
+---
+You have access to a tool called "hock_workflow_agent".
+
+Call this tool whenever the user:
+  - Confirms content is finalized
+  - Approves saving to Dropbox
+  - Approves updating Monday.com
+  - Requests a phase transition
+  - Confirms Gamma slide creation
+  - Requests process close-out
+
+Tool endpoint: POST https://[your-n8n-url]/webhook/hock-agent
+
+Payload structure:
+{
+  "sessionId": "[studyUnitId]-[timestamp]",
+  "studyUnitId": "[e.g. SU-2796]",
+  "certificationProgram": "[CIA / CMA / CFE / CPA]",
+  "phase": "[current phase label]",
+  "userMessage": "[exact user message]",
+  "intent": "[classified intent label]",
+  "timestamp": "[ISO 8601]"
+}
+
+Do NOT call this tool for content generation. Content generation happens
+here in Claude using the project skills and guides. Only call this tool
+for workflow actions (storage, status updates, transitions, close-out).
+---
+
+================================================================================
+SECTION 6 — MONDAY.COM FIELD MAPPINGS
+================================================================================
+
+Board name:             "HOCK International Content Production"
+Status column name:     "Content Status"
+Study Unit ID column:   "Study Unit ID"
+
+Item lookup strategy:   Search by Study Unit ID in the "Study Unit ID"
+                        custom column, or fall back to searching item name.
+
+Status progression (in order):
+  "In Progress"         — set when any phase begins
+  "Textbook Complete"   — Phase 1 complete, Dropbox upload confirmed
+  "MCQs Complete"       — Phase 2 complete, Dropbox upload confirmed
+  "Slides Complete"     — Phase 3 complete, approved
+  "Script Complete"     — Phase 4 complete, approved
+  "Complete"            — Phase 6 close-out confirmed
+
+Subtask name pattern:
+  "{studyUnitId} — {phaseName} — {YYYY-MM-DD}"
+
+Comment format on update:
+  "Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}."
+
+================================================================================
+SECTION 7 — DROPBOX PATH & FILE NAMING
+================================================================================
+
+Base folder:     /HOCK/
+Full path:       /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/
+File name:       {studyUnitId}_{contentType}_{YYYY-MM-DD}.{ext}
+
+Content type → extension mapping:
+  textbook    → .pdf or .docx
+  mcqs        → .xlsx  (WATU Pro 11-column format)
+  slides      → .pdf   (or Gamma URL reference stored as .txt)
+  script      → .docx
+  flashcards  → .pdf or .xlsx
+
+Example full path:
+  /HOCK/CIA/SU-2796/mcqs/SU-2796_mcqs_2025-05-15.xlsx
+
+================================================================================
+END OF BUILD PROMPT
+================================================================================
+
+Begin building now. Output the complete n8n workflow JSON.
+Ask clarifying questions only if a required value is completely absent from
+this prompt. All architecture decisions not specified here should follow
+n8n best practices for v1.x workflows.
