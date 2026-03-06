@@ -85,12 +85,12 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        setDueDate      — set due date on item
        createSubtask   — create subtask under parent item
    - Status values (exact strings):
-       "In Progress"         — set when a phase begins
-       "Textbook Complete"   — set after Phase 1 Dropbox upload confirmed
-       "MCQs Complete"       — set after Phase 2 Dropbox upload confirmed
-       "Slides Complete"     — set after Phase 3 approval
-       "Script Complete"     — set after Phase 4 approval
-       "Complete"            — set at Phase 6 close-out
+       "In Progress"                    — set when a phase begins
+       "Textbook is Ready for Review"   — set after Phase 1 Dropbox upload confirmed
+       "MCQs Ready for Review"          — set after Phase 2 Dropbox upload confirmed
+       "Slides Ready for Review"        — set after Phase 3 approval
+       "Slide Script Ready for Review"  — set after Phase 4 approval
+       "Complete"                       — set at Phase 6 close-out
    - Item lookup: search by Study Unit ID in item name or custom column "Study Unit ID"
    - Subtask name pattern: "{studyUnitId} — {phaseName} — {YYYY-MM-DD}"
    - Comment format:
@@ -250,7 +250,16 @@ Step 1.5 — Monday Gate [GATE]
   Agent says (exact):
     "Would you like me to update the Monday task status to reflect that
     the textbook is complete?"
-  On YES: Call monday_tool with status "Textbook Complete".
+  On YES: Call monday_tool with:
+    - Status: "Textbook is Ready for Review"
+    - Assignee/Person: brian@hockinternational.com
+    - Start Date: today's date
+    - Due Date: today's date + 2 days
+    - Description: Append "Textbook added/updated: {textbookName} - {section}.
+      Added/updated on {datetime} EST. Source: Generated in Claude project."
+    - File: attach most recent textbook file from session
+    Search by exact task name; if no match found, do NOT create — ask user.
+    Return: updated item ID, direct link, confirmation of all updated fields.
   On NO: Stay in Phase 1, note that Monday was not updated.
 
 Phase 1 Exit:
@@ -297,7 +306,16 @@ Step 2.3 — MCQ Dropbox Gate [GATE]
 Step 2.4 — Monday Gate [GATE]
   Agent says (exact):
     "Would you like me to update the MCQ status in Monday?"
-  On YES: Call monday_tool with status "MCQs Complete".
+  On YES: Call monday_tool with:
+    - Status: "MCQs Ready for Review"
+    - Assignee/Person: session creator email
+    - Start Date: today's date
+    - Due Date: today's date + 2 days
+    - Description: Append "MCQs added/updated: {textbookName} - {section}.
+      Added/updated on {datetime} EST. Source: Generated in Claude project."
+    - File: attach most recent MCQ file (.xlsx) from session
+    Search by exact task name; if no match found, do NOT create — ask user.
+    Return: updated item ID, direct link, confirmation of all updated fields.
 
 Phase 2 Exit:
   Agent says: "MCQ creation is complete. The next phase is slide and
@@ -329,8 +347,18 @@ Step 3.3 — Gamma Gate [GATE] (optional)
 Step 3.4 — Storage & Monday Gate [GATE]
   Agent says (exact):
     "Should I store these finalized slides and update the Monday task?"
-  On YES: Call dropbox_tool, then call monday_tool with status
-  "Slides Complete".
+  On YES:
+    1. Call gamma_tool to export .pptx from Gamma presentation.
+    2. Call monday_tool with:
+       - Status: "Slides Ready for Review"
+       - Assignee/Person: session creator email
+       - Due Date: today's date + 2 days
+       - Presentation Link: Gamma share/edit URL (URL column)
+       - Presentation File: exported .pptx (File column)
+       - Description: Append "Slides created in Gamma and PowerPoint exported.
+         Added on {datetime} EST. Gamma link: {gammaUrl}. Source: Claude + Gamma."
+       Search by exact task name; if no match found, do NOT create — ask user.
+       Return: updated item ID, direct link, Gamma URL, confirmation .pptx attached.
 
 ------------------------------------------------------------------------
 PHASE 4 — SCRIPT CREATION
@@ -346,8 +374,16 @@ On receipt: Execute immediately.
 Delivery prompt (exact):
   "Here is the script for these slides. Would you like revisions or
   is this approved?"
-On approved: Call dropbox_tool (on YES gate), then monday_tool with
-status "Script Complete" (on YES gate).
+On approved:
+  - Dropbox gate: Call dropbox_tool (on YES gate).
+  - Monday gate: Call monday_tool with:
+      - Status: "Slide Script Ready for Review"
+      - Assignee/Person: brian@hockinternational.com
+      - Due Date: today's date + 2 days
+      - File: attach slide script (.md or .docx) from session
+      - Description: Append "Slide script added/updated: {textbookName} - {section}.
+        Added on {datetime} EST. Source: Claude narration script."
+      Search by exact task name; if no match found, do NOT create — ask user.
 
 ------------------------------------------------------------------------
 PHASE 5 — FLASHCARDS (OPTIONAL)
@@ -365,6 +401,7 @@ Entry prompt (exact):
   "All phases are complete. Would you like me to close out this process
   and finalize the Monday task?"
 On YES: Call monday_tool with status "Complete".
+  Confirm all artifacts are stored in Dropbox before closing.
 
 ------------------------------------------------------------------------
 PROMPT CLASSIFICATION (intent labels for routing)
@@ -386,6 +423,7 @@ When user sends a message, classify intent as one of:
   PROMPT_MCQ_REGENERATE       → Phase 2.2 revision
   PROMPT_EXCEL_EXPORT         → Phase 2.2 convert to Excel
   PROMPT_SLIDE_OUTLINE        → Phase 3.1 (execute immediately)
+  PROMPT_SLIDE_GENERAL_REVISION → Phase 3.2 revision (fallback for mixed changes)
   PROMPT_SLIDE_VISUALS        → Phase 3.2 revision
   PROMPT_SLIDE_CONDENSE       → Phase 3.2 revision
   PROMPT_SLIDE_EXPAND         → Phase 3.2 revision
@@ -481,12 +519,12 @@ Item lookup strategy:   Search by Study Unit ID in the "Study Unit ID"
                         custom column, or fall back to searching item name.
 
 Status progression (in order):
-  "In Progress"         — set when any phase begins
-  "Textbook Complete"   — Phase 1 complete, Dropbox upload confirmed
-  "MCQs Complete"       — Phase 2 complete, Dropbox upload confirmed
-  "Slides Complete"     — Phase 3 complete, approved
-  "Script Complete"     — Phase 4 complete, approved
-  "Complete"            — Phase 6 close-out confirmed
+  "In Progress"                    — set when any phase begins
+  "Textbook is Ready for Review"   — Phase 1 complete, Dropbox upload confirmed
+  "MCQs Ready for Review"          — Phase 2 complete, Dropbox upload confirmed
+  "Slides Ready for Review"        — Phase 3 complete, approved
+  "Slide Script Ready for Review"  — Phase 4 complete, approved
+  "Complete"                       — Phase 6 close-out confirmed
 
 Subtask name pattern:
   "{studyUnitId} — {phaseName} — {YYYY-MM-DD}"
@@ -511,6 +549,710 @@ Content type → extension mapping:
 
 Example full path:
   /HOCK/CIA/SU-2796/mcqs/SU-2796_mcqs_2025-05-15.xlsx
+
+================================================================================
+SECTION 8 — PROMPT LIBRARY (All 33 Prompts — Full Text)
+================================================================================
+
+This section provides the complete text of every named prompt in the Hock
+International Prompt Library. The agent uses this to:
+  - Recognize when a user pastes a named prompt
+  - Know exactly what each prompt instructs
+  - Route correctly without asking redundant clarifying questions
+  - Execute deterministically on receipt
+
+Rules:
+  - User-pasted prompts are authoritative. Execute immediately.
+  - Do NOT ask for parameters the prompt already contains.
+  - Prompts are phase-locked: reject any prompt used outside its valid phase.
+  - If a prompt is not listed here, it is not valid.
+
+------------------------------------------------------------------------
+PHASE 0 — PROCESS INITIATION
+------------------------------------------------------------------------
+
+[P0-INIT] New Project Initialization Prompt
+Provider: User | Where: Project Instructions
+Purpose: Establish certification, role, assets, integrations, and global rules.
+
+# [CERTIFICATION_NAME] Content Expert — HOCK International
+## Role
+Expert content developer creating exam prep materials (textbooks, MCQs, presentation outlines, slide scripts, flashcards) for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
+## Source Documents & Assets
+- Syllabus: [CERT]_Syllabus.pdf
+- Standards: [STANDARDS_DOC].pdf
+- Textbook: [TEXTBOOK_NAME].md
+- MCQs: [MCQ_FILE_NAME].xlsx or similar
+- Presentation: Gamma link or outline Markdown
+- Slide Script: [SCRIPT_NAME].md or .docx
+- Other: Use uploaded files directly (e.g., Gamma exports, monday attachments)
+## Integrations
+- monday.com connector: Update Content Production board (https://hock-internationalcompany.monday.com/boards/18398486903)
+- Gamma connector: Create presentations using Hock International Theme
+## Content Creation Guides
+Always follow the user-specified guide. Do not blend rules.
+| Content Type          | Guide File                     | Purpose                              |
+|-----------------------|-------------------------------|--------------------------------------|
+| Textbooks             | Textbook_Creation_Guide.md    | Structure, tone, prose-dominant      |
+| MCQs                  | MCQ_Creation_Guide.md         | Questions, distractors, explanations |
+| Presentation Outlines | Presentation_Outline_Guide.md | Slide structure, visuals, Gamma      |
+| Slide Scripts         | Slide_Script_Guide.md         | Narration, cues, timing              |
+| Flashcards            | Flashcard_Guide.md            | Card format, spaced repetition       |
+## Process: ALWAYS Confirm Before Generating
+Follow Content_Creation_Skill.md for routing, depth calibration, production order, and shared principles.
+Production Order (must complete upstream first):
+1. Textbook → MCQs → Presentation Outline → Gamma creation → Slide Script → Flashcards
+2. After completing each deliverable: If requested by user, update the corresponding monday.com task.
+Core Steps:
+1. Use Depth_Calibration_Guide.md first: Present summary table, wait for YES/adjustments.
+2. Generate using specified guide. Reference upstream assets by name.
+3. Apply Token_Optimization_Guide.md: Chunk long outputs, reference don't repeat, checkpoint mid-generation.
+4. For Gamma: Create outline in chat first, confirm, then use Gamma connector.
+5. For monday: Search existing task by name, update Status/Assignee/Due Date/Description/File columns.
+## Key Rules
+- Use [CERTIFYING_BODY] terminology.
+- Cite standards by number from [STANDARDS_DOC].pdf.
+- Never generate without depth confirmation.
+- Token efficiency: Always chunk comprehensive outputs; pause for user check.
+- monday/Gamma: Confirm connector access before actions; update existing tasks only unless user confirms new.
+- Ambiguous requests: Ask "Which content type? Textbook, MCQs, outline, script, flashcards?"
+
+------------------------------------------------------------------------
+PHASE 1 — TEXTBOOK CONTENT CREATION
+------------------------------------------------------------------------
+
+[P1-1.1] Textbook Section Prompt
+Provider: User | Where: Chat | Intent: PROMPT_TEXTBOOK_SECTION
+Purpose: Generate textbook content for specified Section ID.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Create textbook content for [SECTION_ID] from the uploaded syllabus.
+Section: [e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Process:
+1. Confirm prerequisites: Syllabus and standards documents uploaded?
+2. Apply Depth Calibration Skill: Analyze scope, cognitive level, exam weight. Present summary table and recommended depth. Wait for my YES or adjustments.
+3. Follow Textbook Creation Skills: Prose-dominant (65% narrative), integrate standards naturally by number.
+4. Apply Token Optimization Skill: Chunk if comprehensive depth; pause after first segment for check.
+5. Output in Markdown: Start with H1, use hierarchy, end with Summary paragraph.
+Integrate relevant standards from uploaded standards document.
+
+---
+
+[P1-1.2a] Expand Section Prompt
+Provider: User | Where: Chat | Intent: PROMPT_EXPAND
+Purpose: Expand only the specified portion of the textbook. Preserve all else.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Expand the specified part of the previously generated textbook section for this ID. Add content only where described — keep all else identical.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Expansion needed:
+- [Describe what to add, e.g., "Add 2 examples under H2: Emerging Risks"]
+If expansion affects depth, re-apply Depth Calibration Skill briefly and note changes.
+Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
+Apply Token Optimization: Checkpoint if adding >1k words.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.2b] Condense Section Prompt
+Provider: User | Where: Chat | Intent: PROMPT_CONDENSE
+Purpose: Reduce or shorten only specified content.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Condense the specified part of the previously generated textbook section for this ID. Remove/reword only where described — keep all else identical.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Condensation needed:
+- [Describe what to shorten, e.g., "Reduce H3: Data Security by 30%, remove redundant bullets"]
+If condensation affects depth, re-apply Depth Calibration Skill briefly and note changes.
+Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
+Apply Token Optimization: Keep edits minimal.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.2c] Rewrite Section Prompt
+Provider: User | Where: Chat | Intent: PROMPT_REWRITE
+Purpose: Rewrite specified text without changing structure unless stated.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Rewrite the specified part of the previously generated textbook section for this ID. Do not add/remove content unless specified — keep structure identical.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Rewrite needed:
+- [Describe changes, e.g., "Make tone more conversational in intro; fix accuracy in Standard 5.1 reference"]
+Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
+Apply Token Optimization: Edit only targeted areas.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.2d] Insert Content Prompt
+Provider: User | Where: Chat | Intent: PROMPT_INSERT_CONTENT
+Purpose: Insert new content at a defined location.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Insert new content into the previously generated textbook section for this ID at the specified location. Do not change existing content.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Insertion needed:
+- [Describe what/where, e.g., "Add new H3: Mitigation Strategies after H2, ~300 words on best practices"]
+Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
+Apply Token Optimization: Checkpoint if insert >500 words.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.2e] Format-Only Prompt
+Provider: User | Where: Chat | Intent: PROMPT_FORMAT_ONLY
+Purpose: Change formatting only. No content edits.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Reformat the specified part of the previously generated textbook section for this ID. Change only formatting — no content additions/removals/rewrites.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Formatting needed:
+- [Describe changes, e.g., "Convert bullets to numbered steps in Process section; fix header levels"]
+Follow Textbook Creation Skills: Use proper hierarchy.
+Apply Token Optimization: Minimal edits.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.2f] Fallback General Revision Prompt
+Provider: User | Where: Chat | Intent: PROMPT_FALLBACK_REVISION
+Purpose: Mixed or complex revisions when no specific prompt applies.
+
+You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+Revise the previously generated textbook section for this ID. Edit only what is specified — keep unchanged content exactly as-is.
+Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
+Certification: [CIA Part 2]
+Changes needed:
+- [Describe specific change 1, e.g., "Fix tone in intro"]
+- [Describe specific change 2]
+If changes affect depth, re-apply Depth Calibration Skill briefly.
+Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally from uploaded document.
+Apply Token Optimization: Checkpoint for long edits.
+Output full revised section in Markdown.
+
+---
+
+[P1-1.5] Add Textbook to Monday.com
+Provider: Agent | Where: Chat → Monday Tool | Intent: (agent-issued after YES gate)
+Purpose: Update existing Monday task status and attach textbook.
+
+You are connected to my monday.com workspace via the official monday connector/MCP.
+Task: Search for and update an existing item on the Content Production board for [Task Name]
+Do not create a new item unless I confirm.
+Board URL: https://hock-international-company.monday.com/boards/18398486903
+Steps:
+1. Search the board for a task named: [Task Name]
+2. If found, update these columns on that item:
+   - Status: "Textbook is Ready for Review"
+   - Assignee/Person: brian@hockinternational.com
+   - Start Date: today's date
+   - Due Date: today's date + 2 days
+   - Description (Long Text): Append or update with: "Textbook added/updated: [Textbook Name] - [Section]. Added/updated on [current date and time EST]. Source: Generated in Claude project."
+   - Textbook file: Upload/attach or replace the file in this column (File type column)
+3. If no exact match found, do NOT create anything. Instead, reply with: "No matching task found for '[Task Name]'. Confirm if I should create a new item?"
+4. Use these details:
+   Task Name: [exact Task Name, e.g., "CIA Part 2 - Study Unit 3: Risk Management - 3c. Cybersecurity Risks"]
+   Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+   Section: [e.g., 3c. Existing and Emerging Cybersecurity Risks and Data Security]
+   File: [the most recent textbook file generated in this chat, or specify name/URL]
+5. After action, return:
+   - Updated item ID
+   - Direct link to the item
+   - Confirmation of updated fields: Status, Assignee, Start Date, Due Date, Description, File attached
+Execute now using the monday connector. Confirm board access and column names first if needed.
+If any clarification required (e.g., exact column titles, file upload method, or if Task Name matching is partial vs. exact), ask me before proceeding.
+
+------------------------------------------------------------------------
+PHASE 2 — MCQ CREATION
+------------------------------------------------------------------------
+
+[P2-2.1] MCQs Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_GENERATION
+Purpose: Generate MCQs from completed textbook. Apply MCQ Creation Guide, batching, and depth rules.
+
+Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+Section: [e.g., "3c. Existing and Emerging Cybersecurity Risks and Data Security"]
+You are a HOCK International Content Expert creating exam prep MCQs for professional certification candidates with 2-4 years of relevant experience.
+CORE RULES:
+1. Choice A is ALWAYS correct. B, C, D are plausible distractors.
+2. All four choices MUST be similar in length. Rewrite if uneven. For Qs 7-13 & 22-27, make A the shortest.
+3. Never use extreme words (always, never, exclusively, only, solely, under no circumstances, etc.).
+4. Explanations: Detailed (50-100 words each) for all four choices after the question. Use complete sentences. Make them teaching opportunities. No "Choice X is correct/incorrect because" phrasing.
+5. Questions: Scenario-based, application-focused, challenging. Cite standards briefly by number if relevant.
+6. Numbering: [CERT_PREFIX] [SECTION_ID]-[sequential, e.g., CIA26 01.301-CIA26 01.010 or CMA26 03.0501].
+7. Output: Plain text, hard return between choices. No headers before Q1 or Q16.
+PROCESS:
+- Use the completed textbook section above as source — reference previous generation in this chat.
+- Follow MCQ_Creation_Guide and MCQ_Creation_Skills for quantity, difficulty, batching (10-15 per batch with checkpoint), and 11-column Excel format when requested.
+- Apply Depth Calibration if not already done.
+If the user provides a Section ID and the corresponding textbook is already in this chat, immediately generate MCQs. Do not wait for further confirmation unless depth or quantity needs adjustment.
+
+---
+
+[P2-2.2a] General MCQ Revision Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_REVISION
+Purpose: Mixed MCQ revisions. Preserve numbering and rules.
+
+Revise the previously generated MCQs for [Section ID/Name].
+Changes needed:
+- [Describe change 1, e.g., "Make Q5 distractors more plausible – current ones too obvious"]
+- [Describe change 2, e.g., "Shorten explanations in Q10-12 to 60-80 words each"]
+- [etc.]
+Edit only what's specified. Keep all other questions, numbering, format, and rules exactly as-is.
+Follow MCQ Creation Guide and MCQ Creation Skills for any affected rules.
+Output only the full revised set of MCQs in plain text (same format as original).
+
+---
+
+[P2-2.2b] Fix Length / Extremes Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_FIX_LENGTH
+Purpose: Fix length imbalance or prohibited words.
+
+Fix length imbalance and/or prohibited words in the previously generated MCQs for [Section ID/Name].
+Specific fixes:
+- [e.g., "Q3, Q7, Q14: Rewrite choices so all four are similar length"]
+- [e.g., "Q9: Remove 'always' from choice C and rewrite to keep plausibility"]
+Do not change correct answer, scenario, or explanations unless specified.
+Output only the revised questions (full text for affected ones + note which were changed).
+
+---
+
+[P2-2.2c] Strengthen Distractors Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_DISTRACTORS
+Purpose: Improve plausibility of distractors.
+
+Improve distractors in the previously generated MCQs for [Section ID/Name].
+Focus on:
+- [e.g., "Q4, Q11, Q18: Make B, C, D more plausible – current ones too far from correct concept"]
+- [e.g., "Q6: Add common misconception to choice D"]
+Keep A correct and explanations unchanged unless distractor change affects them.
+Output only the revised questions (full text for affected ones).
+
+---
+
+[P2-2.2d] Adjust Explanations Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_EXPLANATIONS
+Purpose: Revise explanations only.
+
+Revise explanations in the previously generated MCQs for [Section ID/Name].
+Changes:
+- [e.g., "All explanations: Shorten to 60-80 words max while keeping teaching value"]
+- [e.g., "Q2, Q15: Strengthen why distractors are wrong – add specific reference to textbook concept"]
+Do not change questions or choices.
+Output only the revised questions with updated explanations.
+
+---
+
+[P2-2.2e] Regenerate Specific Questions Prompt
+Provider: User | Where: Chat | Intent: PROMPT_MCQ_REGENERATE
+Purpose: Replace specific MCQs only.
+
+Regenerate only these specific MCQs from the previous set for [Section ID/Name]:
+Questions to replace:
+- [e.g., Q8, Q13, Q20]
+New versions must follow all core rules and use the same textbook source.
+Output only the new questions (with original numbering) + note "Replaced Q8, Q13, Q20".
+
+---
+
+[P2-2.2f] Convert Batch to Excel Format Prompt
+Provider: User | Where: Chat | Intent: PROMPT_EXCEL_EXPORT
+Purpose: Convert MCQs to 11-column Excel format.
+
+Convert the previously generated MCQs (or revised set) for [Section ID/Name] to 11-column Excel-ready format.
+Columns:
+Category | Question ID | Question Text | Choice A | Choice B | Choice C | Choice D | Explanation for A | Explanation for B | Explanation for C | Explanation for D
+Use Category = [e.g., 2796] or whatever matches the textbook.
+Output as plain text table or tab-separated values ready for copy-paste to Excel.
+
+---
+
+[P2-2.4] Add MCQs to Monday.com
+Provider: Agent | Where: Chat → Monday Tool | Intent: (agent-issued after YES gate)
+Purpose: Update Monday task with MCQ status and attachment.
+
+You are connected to my monday.com workspace via the official monday connector/MCP.
+Task: Search for and update an existing item on the Content Production board for [Task Name]. Do not create a new item unless I confirm.
+Board URL: https://hock-international-company.monday.com/boards/18398486903
+Steps:
+1. Search the board for a task named: [Task Name]
+2. If found, update these columns on that item:
+   - Status: "MCQs Ready for Review"
+   - Assignee/Person: [Creator email — replace with actual]
+   - Start Date: today's date
+   - Due Date: today's date + 2 days
+   - Description (Long Text): Append or update with: "MCQs added/updated: [Textbook Name] - [Section]. Added/updated on [current date and time EST]. Source: Generated in Claude project."
+   - MCQs File: Upload/attach or replace the file in this column (File type column)
+3. If no exact match found, do NOT create anything. Reply: "No matching task found for '[Task Name]'. Confirm if I should create a new item?"
+4. Use these details:
+   Task Name: [exact Task Name, e.g., "CIA Part 2 - Study Unit 3: Risk Management - 3c. Cybersecurity Risks"]
+   Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+   Section: [e.g., 3c. Existing and Emerging Cybersecurity Risks and Data Security]
+   File: [the most recent MCQ file/Excel generated in this chat, or specify name/URL]
+5. After action, return:
+   - Updated item ID
+   - Direct link to the item
+   - Confirmation of updated fields: Status, Assignee, Start Date, Due Date, Description, MCQs File attached
+Execute now using the monday connector. Confirm board access and column names first if needed.
+
+------------------------------------------------------------------------
+PHASE 3 — PRESENTATION / SLIDE CREATION
+------------------------------------------------------------------------
+
+[P3-3.1] Presentation Outline Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_OUTLINE
+Purpose: Generate slide outline from textbook + MCQs. Run slide depth calibration.
+
+Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+Section: [e.g., 3c. Existing and Emerging Cybersecurity Risks and Data Security]
+You are a HOCK International Content Expert creating exam prep materials for professional certification candidates with 2-4 years of relevant experience.
+Task: Create a presentation slide outline for the section above.
+Process:
+1. Confirm prerequisites: Textbook and MCQs for this section complete in chat history?
+2. Apply Depth Calibration Skill: Recommend slide count and density (Basic: 5-8 slides, Medium: 10-15, Comprehensive: 15-25). Present table and wait for YES or adjustments.
+3. Use completed textbook as source (reference previous generation).
+4. Follow Presentation_Creation_Skills and Presentation_Creation_Guide:
+   - One key idea per slide
+   - 3-6 bullets max
+   - Visual placeholders (e.g., [Image: Risk matrix chart], [Icon: warning sign])
+   - Short speaker notes (1-2 sentences for narration)
+   - Gamma-ready Markdown format
+   - Use Hock International Theme: https://gamma.app/themes/share/0mk4i94ypgimwxi
+5. Apply Token Optimization Skill: Chunk if Comprehensive (8-10 slide groups); pause after first batch for check.
+6. Output: Full Markdown outline only (titles, bullets, visuals, notes). Include Gamma template link and instructions for import.
+After outline is confirmed, ask: "Outline ready. Grant Gamma connector access to create in Gamma? Reply Y/N or adjustments."
+Execute now. If depth not yet calibrated, start there.
+
+---
+
+[P3-3.2a] General Presentation Revision Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_GENERAL_REVISION
+Purpose: Fallback for mixed presentation changes. Edit only specified slides; keep all else intact.
+
+Revise the previously generated slide outline for [Section ID/Name].
+Changes needed:
+- [Change 1, e.g., "Slide 7: Change placeholder to bar chart instead of pie chart"]
+- [Change 2, e.g., "Slides 4-6: Reduce bullets to max 4 per slide; simplify wording"]
+- [etc.]
+Edit only specified slides. Keep structure, visuals, notes, and Gamma template link intact.
+Follow Presentation_Creation_Skills and Presentation_Creation_Guide.
+Output the full updated Markdown outline.
+
+---
+
+[P3-3.2b] Adjust Visuals / Placeholders
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_VISUALS
+Purpose: Update visuals only.
+
+Update visuals in the previously generated slide outline for [Section ID/Name].
+Specific changes:
+- [e.g., "Slide 3: Replace [Image: Risk matrix] with [Icon: warning triangle]"]
+- [e.g., "Slide 9: Add [Chart: trend line] for detection effectiveness"]
+Do not change text, bullets, or notes unless specified.
+Output full revised outline in Markdown.
+
+---
+
+[P3-3.2c] Reduce / Condense Density
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_CONDENSE
+Purpose: Reduce slide count or bullet density.
+
+Condense the previously generated slide outline for [Section ID/Name].
+Focus on:
+- [e.g., "Reduce overall to 12 slides max – merge Slides 8-10 into one"]
+- [e.g., "Limit bullets to 3-4 per slide; shorten text"]
+Follow depth guidelines from Presentation_Creation_Skills (Medium: 10-15 slides).
+Output full revised outline in Markdown.
+
+---
+
+[P3-3.2d] Expand / Add Content
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_EXPAND
+Purpose: Add slides or content.
+
+Expand the previously generated slide outline for [Section ID/Name].
+Additions:
+- [e.g., "After Slide 5: Insert new slide titled 'Common Failures' with 3 bullets and [Image: checklist]"]
+- [e.g., "Slide 12: Add speaker note with transition phrase to next topic"]
+Keep existing slides unchanged unless specified.
+Output full revised outline in Markdown.
+
+---
+
+[P3-3.2e] Fix Formatting / Consistency
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_FORMAT
+Purpose: Formatting-only changes.
+
+Reformat the previously generated slide outline for [Section ID/Name].
+Changes:
+- [e.g., "Ensure all slides use consistent bullet style; fix any missing speaker notes"]
+- [e.g., "Add Gamma theme link at top if missing: https://gamma.app/themes/share/0mk4i94ypgimwxi"]
+No content changes – formatting only.
+Output full revised outline in Markdown.
+
+---
+
+[P3-3.2f] Update Speaker Notes
+Provider: User | Where: Chat | Intent: PROMPT_SLIDE_NOTES
+Purpose: Revise speaker notes only.
+
+Revise speaker notes in the previously generated slide outline for [Section ID/Name].
+Changes:
+- [e.g., "All notes: Make more conversational and add pacing cue [Pause 2s]"]
+- [e.g., "Slide 6: Strengthen note to tie back to textbook example"]
+Keep slide titles/bullets/visuals unchanged.
+Output full revised outline in Markdown.
+
+---
+
+[P3-3.3] Send to Gamma Prompt
+Provider: Agent | Where: Chat → Gamma Tool | Intent: PROMPT_GAMMA_CREATE
+Purpose: Create presentation in Gamma using Hock International theme.
+
+You are connected to my Gamma account via the Gamma connector.
+Task: Create the presentation in Gamma using the previously generated slide outline for [Section ID/Name].
+Steps:
+1. Use the Markdown outline from earlier in this chat as the content source.
+2. Apply the Hock International Theme: https://gamma.app/themes/share/0mk4i94ypgimwxi
+3. Import the full outline structure:
+   - Slide titles as headings
+   - Bullets as content
+   - Visual placeholders (e.g., [Image: ...]) as image suggestions
+   - Speaker notes as presenter notes
+4. Keep layout clean: one key idea per slide, 3-6 bullets max, visuals where placeholders exist.
+5. After creation, return:
+   - Direct Gamma share/edit link
+   - Confirmation of theme applied
+   - Thumbnail preview if available
+   - Any warnings (e.g., missing images, layout issues)
+If any part of the outline needs quick tweaks before import, let me know first.
+Execute now using the Gamma connector. Confirm access if needed.
+
+---
+
+[P3-3.4] Export Presentation + Add to Monday.com
+Provider: Agent | Where: Chat → Tools | Intent: (agent-issued after YES gate)
+Purpose: Export slides as PowerPoint and update Monday task with file and Gamma link.
+
+You are connected to both my Gamma account (via Gamma connector) and monday.com workspace (via monday connector/MCP).
+Task: After Gamma presentation is created, export as PowerPoint, then update the existing Content Production board item.
+Board URL: https://hock-international-company.monday.com/boards/18398486903
+Steps:
+1. Retrieve the Gamma presentation just created in this chat. Get the direct Gamma share/edit link. Confirm theme applied: Hock International (https://gamma.app/themes/share/0mk4i94ypgimwxi)
+2. Export the Gamma presentation as PowerPoint (.pptx) file using the Gamma connector's export feature.
+3. Search the monday board for the existing item by Task Name: [Task Name]
+4. If found, update these columns:
+   - Status: "Slides Ready for Review"
+   - Assignee/Person: [Creator email — replace with actual]
+   - Due Date: today's date + 2 days
+   - Presentation Link: [Gamma share/edit link] (URL/link column)
+   - Presentation File: Upload/attach the exported .pptx file (File type column)
+   - Description (Long Text): Append: "Slides created in Gamma and PowerPoint exported. Added on [current date and time EST]. Gamma link: [Gamma URL]. Source: Claude + Gamma."
+5. If no exact match found, reply: "No matching task found for '[Task Name]'. Confirm if I should create a new item?"
+6. After action, return:
+   - Updated monday item ID and direct link
+   - Gamma presentation link
+   - Confirmation of PowerPoint attached to Presentation File
+   - Any errors (e.g., export failed, column not found)
+Execute now using both connectors. Confirm access to Gamma and monday if needed.
+
+------------------------------------------------------------------------
+PHASE 4 — SLIDE SCRIPT CREATION
+------------------------------------------------------------------------
+
+[P4-4.1] Slide Script / Narration Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_NARRATION
+Purpose: Generate narration aligned to slides with timing calibration.
+
+Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+Section: [e.g., 3c. Existing and Emerging Cybersecurity Risks and Data Security]
+You are a HOCK International Content Expert creating exam prep video narration for professional certification candidates with 2-4 years of relevant experience.
+Task: Create a slide narration script for the presentation in project resources.
+Process:
+1. Confirm prerequisites: Textbook, MCQs, and Gamma presentation (or outline/export) for this section are in project resources or chat history?
+2. Source: Use the Gamma presentation file/link as primary base (map narration to each slide's title, bullets, visuals). Reference textbook/MCQs for depth and accuracy.
+3. Apply Depth Calibration Skill: Recommend total timing (Basic: 5-8 min, Medium: 10-15 min, Comprehensive: 15-25 min). Present quick table and wait for YES or override.
+4. Follow Slide_Script_Skills and Slide_Script_Guide:
+   - Format per slide: **Slide X: [Title]** + spoken text (conversational, professional tone) + cues [Pause 2s], [Emphasize: key term], [Transition: "Next..."]
+   - 120-150 words/min pacing
+   - Tie narration to visuals (e.g., "As shown in this chart...")
+   - Depth-adjusted detail: Basic (short sentences), Comprehensive (deeper explanations)
+5. Apply Token Optimization Skill: Chunk into 5-8 min segments if Comprehensive; pause after first batch ("Batch 1: Slides 1-8, ~6 min. Continue?").
+6. Output: Markdown format only:
+   - Total estimated time
+   - Numbered slides with narration + cues
+   - Video notes at end (e.g., "Record at 130 wpm, clear enunciation")
+After script is complete, ask: "Script ready. Want to create a doc/attach to monday? Or revise first?"
+Execute now. If depth not calibrated, start there.
+
+---
+
+[P4-4.2a] General Script Revision Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_REVISION
+Purpose: Mixed script revisions.
+
+Revise the previously generated slide script for [Section ID/Name].
+Changes needed:
+- [Change 1, e.g., "Make narration on Slides 4-6 more conversational"]
+- [Change 2, e.g., "Add [Pause 3s] cue after visual reveal on Slide 9"]
+- [etc.]
+Edit only specified slides. Keep timing, format, and cues intact unless specified.
+Follow Slide_Script_Skills and Slide_Script_Guide.
+Output the full updated script in Markdown.
+
+---
+
+[P4-4.2b] Adjust Pacing / Timing Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_PACING
+Purpose: Change total timing or pacing.
+
+Adjust pacing in the previously generated slide script for [Section ID/Name].
+Specific changes:
+- [e.g., "Reduce total to 10-12 min – shorten Slides 7-10 by ~30%"]
+- [e.g., "Slide 5: Add pacing cue [Speak slower here] for complex concept"]
+Follow depth timing from Slide_Script_Guide (e.g., Medium: 10-15 min).
+Output full updated script in Markdown with revised total time estimate.
+
+---
+
+[P4-4.2c] Strengthen Cues / Emphasis Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_CUES
+Purpose: Update emphasis and cues.
+
+Update cues and emphasis in the previously generated slide script for [Section ID/Name].
+Focus on:
+- [e.g., "Add [Emphasize: fraud triangle] on Slide 3 and [Pause 2s] after"]
+- [e.g., "All transitions: Make more natural, e.g., 'Let's look at why this fails...'"]
+Keep spoken text unchanged unless specified.
+Output full updated script in Markdown.
+
+---
+
+[P4-4.2d] Tie to Visuals / Textbook Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_TIE_VISUALS
+Purpose: Improve alignment to visuals/textbook.
+
+Improve visual references and textbook ties in the previously generated slide script for [Section ID/Name].
+Changes:
+- [e.g., "Slides 6-8: Explicitly reference visuals, e.g., 'As this chart shows...'"]
+- [e.g., "Slide 10: Add brief tie-back to textbook example from Study Unit 3"]
+No changes to core narration or timing.
+Output full updated script in Markdown.
+
+---
+
+[P4-4.2e] Shorten / Condense Narration Prompt
+Provider: User | Where: Chat | Intent: PROMPT_SCRIPT_SHORTEN
+Purpose: Reduce narration length.
+
+Condense narration in the previously generated slide script for [Section ID/Name].
+Specific:
+- [e.g., "Reduce all spoken text to 1-2 sentences per slide where possible"]
+- [e.g., "Remove redundant explanations on Slides 11-13"]
+Maintain teaching value and cues.
+Output full updated script in Markdown with new total time estimate.
+
+---
+
+[P4-4.3] Add Slide Script to Monday.com
+Provider: Agent | Where: Chat → Monday Tool | Intent: (agent-issued after YES gate)
+Purpose: Attach approved script and update Monday status.
+
+You are connected to my monday.com workspace via the official monday connector/MCP.
+Task: Search for and update an existing item on the Content Production board with the slide script.
+Board URL: https://hock-international-company.monday.com/boards/18398486903
+Steps:
+1. Search the board for a task named: [Task Name]
+2. If found, update these columns on that item:
+   - Status: "Slide Script Ready for Review"
+   - Assignee/Person: brian@hockinternational.com
+   - Due Date: today's date + 2 days
+   - Slide Script: Upload/attach the slide script file (File type column) – use the most recent script from this chat (Markdown or .docx export)
+   - Description (Long Text): Append: "Slide script added/updated: [Textbook Name] - [Section]. Added on [current date and time EST]. Source: Claude narration script."
+3. If no exact match found, do NOT create anything. Reply: "No matching task found for '[Task Name]'. Confirm if I should create a new item?"
+4. Use these details:
+   Task Name: [exact Task Name to search for]
+   Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+   Section: [e.g., 3c. Existing and Emerging Cybersecurity Risks and Data Security]
+   File: [the most recent slide script from chat – export as .docx if needed]
+5. After action, return:
+   - Updated item ID
+   - Direct link to the item
+   - Confirmation of updated fields: Status, Assignee, Due Date, Description, Slide Script attached
+Execute now using the monday connector. Confirm board access and column names first if needed.
+
+------------------------------------------------------------------------
+PHASE 5 — FLASHCARDS (OPTIONAL)
+------------------------------------------------------------------------
+
+[P5-5.1] Flashcard Guide Prompt
+Provider: User | Where: Chat | Intent: PROMPT_FLASHCARD_GUIDE
+Purpose: Generate flashcards from approved textbook, MCQs, and slides.
+
+[Flashcard Guide Prompt text — to be defined and inserted here when finalized.
+Generate flashcards from all approved upstream content: textbook, MCQs, and slide outline for the specified section.
+Apply Flashcard_Guide.md for card format and spaced repetition rules.
+Source: Use approved content from this chat session only.]
+
+------------------------------------------------------------------------
+PHASE 6 — CLOSE-OUT
+------------------------------------------------------------------------
+
+[P6-Close] Close-Out Confirmation
+Provider: User | Where: Chat | Intent: PROCESS_CLOSEOUT
+Purpose: Finalize process and close Monday task.
+
+All phases complete. Confirm all artifacts are stored in Dropbox and Monday task reflects final status "Complete".
+Agent will: verify Dropbox artifacts present for all phases completed, call monday_tool with status "Complete", and confirm close-out to user.
+
+------------------------------------------------------------------------
+PROMPT LIBRARY SUMMARY TABLE
+------------------------------------------------------------------------
+
+Phase | Step  | Prompt Name                          | Provider | Intent Label
+------|-------|--------------------------------------|----------|---------------------------
+0     | Init  | New Project Initialization Prompt    | User     | (Project Instructions)
+1     | 1.1   | Textbook Section Prompt              | User     | PROMPT_TEXTBOOK_SECTION
+1     | 1.2   | Expand Section Prompt                | User     | PROMPT_EXPAND
+1     | 1.2   | Condense Section Prompt              | User     | PROMPT_CONDENSE
+1     | 1.2   | Rewrite Section Prompt               | User     | PROMPT_REWRITE
+1     | 1.2   | Insert Content Prompt                | User     | PROMPT_INSERT_CONTENT
+1     | 1.2   | Format-Only Prompt                   | User     | PROMPT_FORMAT_ONLY
+1     | 1.2   | Fallback General Revision Prompt     | User     | PROMPT_FALLBACK_REVISION
+1     | 1.5   | Add Textbook to Monday.com           | Agent    | (gate-triggered)
+2     | 2.1   | MCQs Prompt                          | User     | PROMPT_MCQ_GENERATION
+2     | 2.2   | General MCQ Revision Prompt          | User     | PROMPT_MCQ_REVISION
+2     | 2.2   | Fix Length / Extremes Prompt         | User     | PROMPT_MCQ_FIX_LENGTH
+2     | 2.2   | Strengthen Distractors Prompt        | User     | PROMPT_MCQ_DISTRACTORS
+2     | 2.2   | Adjust Explanations Prompt           | User     | PROMPT_MCQ_EXPLANATIONS
+2     | 2.2   | Regenerate Specific Questions Prompt | User     | PROMPT_MCQ_REGENERATE
+2     | 2.2   | Convert Batch to Excel Format Prompt | User     | PROMPT_EXCEL_EXPORT
+2     | 2.4   | Add MCQs to Monday.com               | Agent    | (gate-triggered)
+3     | 3.1   | Presentation Outline Prompt          | User     | PROMPT_SLIDE_OUTLINE
+3     | 3.2   | General Presentation Revision Prompt | User     | PROMPT_SLIDE_GENERAL_REVISION
+3     | 3.2   | Adjust Visuals / Placeholders        | User     | PROMPT_SLIDE_VISUALS
+3     | 3.2   | Reduce / Condense Density            | User     | PROMPT_SLIDE_CONDENSE
+3     | 3.2   | Expand / Add Content                 | User     | PROMPT_SLIDE_EXPAND
+3     | 3.2   | Fix Formatting / Consistency         | User     | PROMPT_SLIDE_FORMAT
+3     | 3.2   | Update Speaker Notes                 | User     | PROMPT_SLIDE_NOTES
+3     | 3.3   | Send to Gamma Prompt                 | Agent    | PROMPT_GAMMA_CREATE
+3     | 3.4   | Export Presentation + Add to Monday  | Agent    | (gate-triggered)
+4     | 4.1   | Slide Script / Narration Prompt      | User     | PROMPT_SCRIPT_NARRATION
+4     | 4.2   | General Script Revision Prompt       | User     | PROMPT_SCRIPT_REVISION
+4     | 4.2   | Adjust Pacing / Timing Prompt        | User     | PROMPT_SCRIPT_PACING
+4     | 4.2   | Strengthen Cues / Emphasis Prompt    | User     | PROMPT_SCRIPT_CUES
+4     | 4.2   | Tie to Visuals / Textbook Prompt     | User     | PROMPT_SCRIPT_TIE_VISUALS
+4     | 4.2   | Shorten / Condense Narration Prompt  | User     | PROMPT_SCRIPT_SHORTEN
+4     | 4.3   | Add Slide Script to Monday.com       | Agent    | (gate-triggered)
+5     | 5.1   | Flashcard Guide Prompt               | User     | PROMPT_FLASHCARD_GUIDE
+6     | Close | Close-Out Confirmation               | User     | PROCESS_CLOSEOUT
 
 ================================================================================
 END OF BUILD PROMPT
