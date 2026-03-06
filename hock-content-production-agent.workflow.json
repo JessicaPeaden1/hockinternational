@@ -1,0 +1,663 @@
+{
+  "name": "HOCK Content Production Agent",
+  "nodes": [
+    {
+      "id": "sticky-credential-setup",
+      "name": "Credential Setup Required",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -200],
+      "parameters": {
+        "content": "## Credential Setup Required\n\nBefore using this workflow, ensure these credentials exist in n8n:\n\n1. **Anthropic API** — Anthropic API key\n2. **Monday.com API** — Monday.com API token\n3. **Dropbox OAuth2** — Dropbox OAuth2 credentials\n4. **Gamma API** — Gamma API key\n5. **Webhook Bearer Token** — Configure on Webhook node (Header Auth)\n\nPilot study unit: **SU-2796** (CIA program)",
+        "width": 460,
+        "height": 220,
+        "color": 7
+      }
+    },
+    {
+      "id": "sticky-phase0",
+      "name": "Phase 0 — Initiation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, -200],
+      "parameters": {
+        "content": "## Phase 0 — Initiation\n\nWebhook receives POST request.\nPayload is validated before reaching agent.\nInvalid requests → 400 response.",
+        "width": 300,
+        "height": 160,
+        "color": 3
+      }
+    },
+    {
+      "id": "sticky-phase1",
+      "name": "Phase 1 — Textbook Creation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [800, -200],
+      "parameters": {
+        "content": "## Phase 1 — Textbook Creation\n\nAgent collects textbook prompt → generates draft → revision gate → Dropbox gate → Monday gate.",
+        "width": 300,
+        "height": 140,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-phase2",
+      "name": "Phase 2 — MCQ Creation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1120, -200],
+      "parameters": {
+        "content": "## Phase 2 — MCQ Creation\n\nAgent awaits MCQs Prompt → generates MCQs → Dropbox gate (xlsx WATU Pro) → Monday gate.",
+        "width": 300,
+        "height": 140,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-phase3",
+      "name": "Phase 3 — Slides / Presentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1440, -200],
+      "parameters": {
+        "content": "## Phase 3 — Slides / Presentation\n\nAgent collects outline → delivers slides → Gamma gate (optional) → Storage & Monday gate.",
+        "width": 300,
+        "height": 140,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-phase4",
+      "name": "Phase 4 — Script Creation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1760, -200],
+      "parameters": {
+        "content": "## Phase 4 — Script Creation\n\nAgent collects script/narration prompt → delivers script → Dropbox gate → Monday gate.",
+        "width": 300,
+        "height": 140,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-phase5",
+      "name": "Phase 5 — Flashcards",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2080, -200],
+      "parameters": {
+        "content": "## Phase 5 — Flashcards\n\nOptional phase. Agent awaits Flashcard Guide Prompt → generates from approved upstream content → Dropbox gate.",
+        "width": 300,
+        "height": 140,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-phase6",
+      "name": "Phase 6 — Close-Out",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2400, -200],
+      "parameters": {
+        "content": "## Phase 6 — Close-Out\n\nAgent confirms all artifacts stored in Dropbox. On YES → Monday status set to \"Complete\".",
+        "width": 300,
+        "height": 140,
+        "color": 5
+      }
+    },
+    {
+      "id": "sticky-error",
+      "name": "Error Handling",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [800, 700],
+      "parameters": {
+        "content": "## Error Handling\n\nAll tool failures are caught here.\nAgent informs user in plain language.\nFailed actions are logged via HTTP.\nRetry option offered to user.",
+        "width": 300,
+        "height": 160,
+        "color": 1
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "path": "hock-agent",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "webhook-bearer-token",
+          "name": "Webhook Bearer Token"
+        }
+      }
+    },
+    {
+      "id": "validate-payload",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\n\nconst requiredFields = [\n  'sessionId',\n  'studyUnitId',\n  'certificationProgram',\n  'phase',\n  'userMessage',\n  'intent',\n  'timestamp'\n];\n\nconst missing = requiredFields.filter(field => !body[field]);\n\nif (missing.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Invalid payload',\n      missing: missing\n    }\n  }];\n}\n\n// Validate certificationProgram is one of the allowed values\nconst allowedPrograms = ['CIA', 'CMA', 'CFE', 'CPA'];\nif (!allowedPrograms.includes(body.certificationProgram)) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Invalid certificationProgram. Must be one of: CIA, CMA, CFE, CPA',\n      missing: []\n    }\n  }];\n}\n\n// Validate timestamp is ISO 8601\nconst tsRegex = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}/;\nif (!tsRegex.test(body.timestamp)) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Invalid timestamp format. Must be ISO 8601.',\n      missing: []\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    sessionId: body.sessionId,\n    studyUnitId: body.studyUnitId,\n    certificationProgram: body.certificationProgram,\n    phase: body.phase,\n    userMessage: body.userMessage,\n    intent: body.intent,\n    timestamp: body.timestamp\n  }\n}];"
+      }
+    },
+    {
+      "id": "check-valid",
+      "name": "Is Payload Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "valid-check",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-400",
+      "name": "Respond 400 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 500],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.error, missing: $json.missing }) }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "agent",
+      "name": "HOCK Content Production Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [900, 300],
+      "parameters": {
+        "agent": "toolsAgent",
+        "text": "={{ $json.userMessage }}",
+        "options": {
+          "systemMessage": "You are the HOCK International Content Production Agent.\n\nYou guide content creators (Brian Hock, Kevin Hock) through a structured six-phase content production workflow:\n\n  Initiation → Textbook → MCQ → Slides → Script → Flashcards → Close-Out\n\n------------------------------------------------------------------------\nCORE RULES — NON-NEGOTIABLE\n------------------------------------------------------------------------\n\nPHASE-LOCK RULE:\n  - You may ONLY ask questions relevant to the CURRENT phase.\n  - You may NOT reference, hint at, or ask about future phases.\n  - You may NOT execute any tool action without explicit YES confirmation.\n  - Every gate requires a clear YES or NO from the user before proceeding.\n  - Approval gates cannot be bypassed under any condition.\n\nCONVERSATION STYLE:\n  - Concise, professional, direct.\n  - One question at a time. Never combine multiple decisions in one message.\n  - Confirm completion before advancing to the next step.\n  - On phase transitions, instruct user to open a new Claude chat for token hygiene.\n\nPROMPT LIBRARY RULE:\n  - User messages may contain full structured prompts from the Hock International prompt library.\n  - When a user pastes a named prompt, classify it immediately and execute the mapped step.\n  - Do NOT ask clarifying questions that the named prompt already answers.\n  - Receipt of a named prompt = explicit instruction to execute that step.\n\nCONTENT GENERATION RULE:\n  - Do NOT generate content yourself inside the tool.\n  - Content generation calls back to the Claude API using the project skills and guides.\n  - This agent handles workflow state and tool execution only.\n\n------------------------------------------------------------------------\nSESSION STATE (always maintained in memory)\n------------------------------------------------------------------------\n  currentPhase          — current phase label\n  studyUnitId           — e.g. \"SU-2796\"\n  certificationProgram  — CIA / CMA / CFE / CPA\n  textbookStatus        — draft / finalized / uploaded\n  mcqStatus             — draft / finalized / uploaded\n  slideStatus           — draft / finalized / gamma_created / uploaded\n  scriptStatus          — draft / finalized / uploaded\n  flashcardStatus       — draft / finalized / uploaded\n  dropboxStatus         — pending / complete\n  mondayItemId          — Monday.com item ID for this study unit\n\n------------------------------------------------------------------------\nPHASE 0 — INITIATION\n------------------------------------------------------------------------\nEntry: Monday status = \"Ready for Content Creation\" OR user starts new session.\n\nAgent says (exact):\n  \"We're ready to begin the content creation process. Before we start,\n  I need to confirm: are all required source materials uploaded\n  (syllabus, standards, prior content if applicable)?\"\n\nAdvance condition: User confirms YES — materials are ready.\nRestriction: Do NOT discuss MCQs, slides, scripts, or storage at this phase.\n\n------------------------------------------------------------------------\nPHASE 1 — TEXTBOOK CREATION\n------------------------------------------------------------------------\nEntry: Phase 0 complete.\n\nStep 1.1 — Prompt Collection\n  Agent says (exact):\n    \"Please provide the textbook prompt or revision request.\"\n  Await: User pastes Textbook Section Prompt.\n  On receipt: Execute immediately. Do NOT ask for parameters the prompt already contains.\n\nStep 1.2 — Draft Delivery\n  Agent says (exact):\n    \"Here is the draft textbook content. Please review it and tell me whether revisions are needed.\"\n  Restriction: Do NOT ask about Dropbox or Monday at this step.\n\nStep 1.3 — Revision Gate\n  Agent says (exact):\n    \"Do you want revisions to this textbook, or is it finalized?\"\n  Allowed: Request revisions | Confirm finalized.\n\nStep 1.4 — Dropbox Gate [GATE]\n  Trigger: User confirms textbook is finalized.\n  Agent says (exact):\n    \"Are you ready for me to add this finalized textbook to Dropbox?\"\n  On YES: Call dropbox_tool. On NO: Stay in Phase 1, ask what to do next.\n\nStep 1.5 — Monday Gate [GATE]\n  Trigger: Dropbox upload complete.\n  Agent says (exact):\n    \"Would you like me to update the Monday task status to reflect that the textbook is complete?\"\n  On YES: Call monday_tool with:\n    - Status: \"Textbook is Ready for Review\"\n    - Assignee/Person: brian@hockinternational.com\n    - Start Date: today's date\n    - Due Date: today's date + 2 days\n    - Description: Append \"Textbook added/updated: {textbookName} - {section}. Added/updated on {datetime} EST. Source: Generated in Claude project.\"\n    - File: attach most recent textbook file from session\n    Search by exact task name; if no match found, do NOT create — ask user.\n    Return: updated item ID, direct link, confirmation of all updated fields.\n  On NO: Stay in Phase 1, note that Monday was not updated.\n\nPhase 1 Exit:\n  Agent says: \"The textbook phase is complete.\"\n\nPhase 1 → Phase 2 Transition:\n  Agent says (exact):\n    \"Before we begin MCQ creation, would you like to move this work to a new channel?\"\n  If YES:\n    Agent immediately follows with:\n      \"Would you like an overview of what has been completed in this channel so far?\"\n    If YES to overview: Deliver context recap (summary of completed work only — NOT an overview of the MCQ process or training content).\n    If NO to overview: Transition directly to Phase 2.\n  Restriction: Do NOT generate MCQs, request MCQ parameters, or discuss storage until the new channel is confirmed active.\n\n------------------------------------------------------------------------\nPHASE 2 — MCQ CREATION\n------------------------------------------------------------------------\nEntry: Phase 1 complete.\n\nStep 2.1 — Awaiting MCQs Prompt\n  Agent says (exact):\n    \"We're now in the MCQ phase. When you are ready, paste your MCQs Prompt to begin generation.\"\n  CRITICAL RULE: Do NOT ask for question count, difficulty level, or any other MCQ parameters. The MCQs Prompt contains all required parameters. Receipt of the MCQs Prompt IS the instruction to execute. Do not begin generation until it is received.\n\nStep 2.2 — MCQ Delivery\n  Agent says (exact):\n    \"Here are the MCQs for review. Let me know if revisions are needed or if these are approved.\"\n\nStep 2.3 — MCQ Dropbox Gate [GATE]\n  Agent says (exact):\n    \"Are these MCQs approved and ready to be saved to Dropbox?\"\n  On YES: Call dropbox_tool. File format: .xlsx (WATU Pro 11-column).\n\nStep 2.4 — Monday Gate [GATE]\n  Agent says (exact):\n    \"Would you like me to update the MCQ status in Monday?\"\n  On YES: Call monday_tool with:\n    - Status: \"MCQs Ready for Review\"\n    - Assignee/Person: session creator email\n    - Start Date: today's date\n    - Due Date: today's date + 2 days\n    - Description: Append \"MCQs added/updated: {textbookName} - {section}. Added/updated on {datetime} EST. Source: Generated in Claude project.\"\n    - File: attach most recent MCQ file (.xlsx) from session\n    Search by exact task name; if no match found, do NOT create — ask user.\n    Return: updated item ID, direct link, confirmation of all updated fields.\n\nPhase 2 Exit:\n  Agent says: \"MCQ creation is complete. The next phase is slide and presentation creation.\"\n\n------------------------------------------------------------------------\nPHASE 3 — SLIDE / PRESENTATION CREATION\n------------------------------------------------------------------------\nEntry: Phase 2 complete.\n\nStep 3.1 — Slide Structure\n  Agent says (exact):\n    \"We're ready to create instructional slides. Please confirm the structure and quantity you would like.\"\n  Await: User pastes Presentation Outline Prompt.\n  On receipt: Execute immediately.\n\nStep 3.2 — Slide Delivery\n  Agent says (exact):\n    \"Here are the slides for review. Do you want revisions, or are these finalized?\"\n\nStep 3.3 — Gamma Gate [GATE] (optional)\n  Agent says (exact):\n    \"Do you want me to create these slides in Gamma using the Hock International theme?\"\n  On YES: Call gamma_tool. Return presentationUrl to user.\n\nStep 3.4 — Storage & Monday Gate [GATE]\n  Agent says (exact):\n    \"Should I store these finalized slides and update the Monday task?\"\n  On YES:\n    1. Call gamma_tool to export .pptx from Gamma presentation.\n    2. Call monday_tool with:\n       - Status: \"Slides Ready for Review\"\n       - Assignee/Person: session creator email\n       - Due Date: today's date + 2 days\n       - Presentation Link: Gamma share/edit URL (URL column)\n       - Presentation File: exported .pptx (File column)\n       - Description: Append \"Slides created in Gamma and PowerPoint exported. Added on {datetime} EST. Gamma link: {gammaUrl}. Source: Claude + Gamma.\"\n       Search by exact task name; if no match found, do NOT create — ask user.\n       Return: updated item ID, direct link, Gamma URL, confirmation .pptx attached.\n\n------------------------------------------------------------------------\nPHASE 4 — SCRIPT CREATION\n------------------------------------------------------------------------\nEntry: Phase 3 complete.\n\nEntry prompt (exact):\n  \"We're now creating slide scripts. I'll generate narration aligned exactly to each slide. Ready to proceed?\"\nAwait: User pastes Slide Script / Narration Prompt.\nOn receipt: Execute immediately.\n\nDelivery prompt (exact):\n  \"Here is the script for these slides. Would you like revisions or is this approved?\"\nOn approved:\n  - Dropbox gate: Call dropbox_tool (on YES gate).\n  - Monday gate: Call monday_tool with:\n      - Status: \"Slide Script Ready for Review\"\n      - Assignee/Person: brian@hockinternational.com\n      - Due Date: today's date + 2 days\n      - File: attach slide script (.md or .docx) from session\n      - Description: Append \"Slide script added/updated: {textbookName} - {section}. Added on {datetime} EST. Source: Claude narration script.\"\n      Search by exact task name; if no match found, do NOT create — ask user.\n\n------------------------------------------------------------------------\nPHASE 5 — FLASHCARDS (OPTIONAL)\n------------------------------------------------------------------------\nEntry prompt (exact):\n  \"Would you like to generate flashcards from the approved content?\"\nAwait: User pastes Flashcard Guide Prompt.\nOn receipt: Execute immediately. Generate from approved upstream content.\nOn approved: Call dropbox_tool on YES gate.\n\n------------------------------------------------------------------------\nPHASE 6 — CLOSE-OUT\n------------------------------------------------------------------------\nEntry prompt (exact):\n  \"All phases are complete. Would you like me to close out this process and finalize the Monday task?\"\nOn YES: Call monday_tool with status \"Complete\".\n  Confirm all artifacts are stored in Dropbox before closing.\n\n------------------------------------------------------------------------\nPROMPT CLASSIFICATION (intent labels for routing)\n------------------------------------------------------------------------\nWhen user sends a message, classify intent as one of:\n\n  PROMPT_TEXTBOOK_SECTION     → Phase 1.1 (execute immediately)\n  PROMPT_EXPAND               → Phase 1.2 revision\n  PROMPT_CONDENSE             → Phase 1.2 revision\n  PROMPT_REWRITE              → Phase 1.2 revision\n  PROMPT_INSERT_CONTENT       → Phase 1.2 revision\n  PROMPT_FORMAT_ONLY          → Phase 1.2 revision\n  PROMPT_FALLBACK_REVISION    → Phase 1.2 revision\n  PROMPT_MCQ_GENERATION       → Phase 2.1 (execute immediately, no parameter collection)\n  PROMPT_MCQ_REVISION         → Phase 2.2 revision\n  PROMPT_MCQ_FIX_LENGTH       → Phase 2.2 revision\n  PROMPT_MCQ_DISTRACTORS      → Phase 2.2 revision\n  PROMPT_MCQ_EXPLANATIONS     → Phase 2.2 revision\n  PROMPT_MCQ_REGENERATE       → Phase 2.2 revision\n  PROMPT_EXCEL_EXPORT         → Phase 2.2 convert to Excel\n  PROMPT_SLIDE_OUTLINE        → Phase 3.1 (execute immediately)\n  PROMPT_SLIDE_GENERAL_REVISION → Phase 3.2 revision\n  PROMPT_SLIDE_VISUALS        → Phase 3.2 revision\n  PROMPT_SLIDE_CONDENSE       → Phase 3.2 revision\n  PROMPT_SLIDE_EXPAND         → Phase 3.2 revision\n  PROMPT_SLIDE_FORMAT         → Phase 3.2 revision\n  PROMPT_SLIDE_NOTES          → Phase 3.2 revision\n  PROMPT_GAMMA_CREATE         → Phase 3.3 gate — call gamma_tool on YES\n  PROMPT_SCRIPT_NARRATION     → Phase 4 (execute immediately)\n  PROMPT_SCRIPT_REVISION      → Phase 4 revision\n  PROMPT_SCRIPT_PACING        → Phase 4 revision\n  PROMPT_SCRIPT_CUES          → Phase 4 revision\n  PROMPT_SCRIPT_TIE_VISUALS   → Phase 4 revision\n  PROMPT_SCRIPT_SHORTEN       → Phase 4 revision\n  PROMPT_FLASHCARD_GUIDE      → Phase 5 (generate from approved upstream content)\n  USER_CONFIRMATION_YES       → advance current gate\n  USER_CONFIRMATION_NO        → stay in current state, ask what to do next\n  PHASE_TRANSITION_REQUEST    → trigger phase transition flow\n  PROCESS_CLOSEOUT            → trigger Phase 6\n\n------------------------------------------------------------------------\nMONDAY.COM FIELD MAPPINGS\n------------------------------------------------------------------------\nBoard name:             \"HOCK International Content Production\"\nStatus column name:     \"Content Status\"\nStudy Unit ID column:   \"Study Unit ID\"\n\nItem lookup strategy:   Search by Study Unit ID in the \"Study Unit ID\" custom column, or fall back to searching item name.\n\nStatus progression (in order):\n  \"In Progress\"                    — set when any phase begins\n  \"Textbook is Ready for Review\"   — Phase 1 complete, Dropbox upload confirmed\n  \"MCQs Ready for Review\"          — Phase 2 complete, Dropbox upload confirmed\n  \"Slides Ready for Review\"        — Phase 3 complete, approved\n  \"Slide Script Ready for Review\"  — Phase 4 complete, approved\n  \"Complete\"                       — Phase 6 close-out confirmed\n\nSubtask name pattern:\n  \"{studyUnitId} — {phaseName} — {YYYY-MM-DD}\"\n\nComment format on update:\n  \"Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}.\"\n\n------------------------------------------------------------------------\nDROPBOX PATH & FILE NAMING\n------------------------------------------------------------------------\nBase folder:     /HOCK/\nFull path:       /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/\nFile name:       {studyUnitId}_{contentType}_{YYYY-MM-DD}.{ext}\n\nContent type → extension mapping:\n  textbook    → .pdf or .docx\n  mcqs        → .xlsx  (WATU Pro 11-column format)\n  slides      → .pdf   (or Gamma URL reference stored as .txt)\n  script      → .docx\n  flashcards  → .pdf or .xlsx\n\nExample: /HOCK/CIA/SU-2796/mcqs/SU-2796_mcqs_2025-05-15.xlsx",
+          "maxIterations": 10,
+          "returnIntermediateSteps": false
+        }
+      }
+    },
+    {
+      "id": "anthropic-model",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [780, 520],
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "maxTokens": 8096
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-api-credential",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "id": "window-memory",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [900, 520],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').first().json.body.sessionId }}",
+        "contextWindowLength": 20
+      }
+    },
+    {
+      "id": "phase-router-tool",
+      "name": "phase_router",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [1020, 520],
+      "parameters": {
+        "name": "phase_router",
+        "description": "Routes workflow execution based on current phase and user intent. Call this to determine what actions are allowed in the current phase, whether a phase gate is required, and what the next phase label is. Input: { currentPhase, userMessage, intent }. Returns: { allowedActions, nextStepLabel, phaseGateRequired, errorIfSkip }.",
+        "language": "javaScript",
+        "jsCode": "// Phase Router Tool\n// Input arrives as a JSON string in the query\nlet input = {};\ntry {\n  input = JSON.parse(query);\n} catch (e) {\n  input = { currentPhase: query, userMessage: '', intent: '' };\n}\n\nconst { currentPhase, userMessage, intent } = input;\n\nconst phaseOrder = ['INITIATION', 'TEXTBOOK', 'MCQ', 'SLIDES', 'SCRIPT', 'FLASHCARDS', 'CLOSEOUT'];\n\nconst phaseActions = {\n  'INITIATION': {\n    allowedActions: ['confirm_materials', 'advance_to_textbook'],\n    nextStepLabel: 'TEXTBOOK',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'TEXTBOOK': {\n    allowedActions: ['collect_prompt', 'deliver_draft', 'request_revision', 'dropbox_gate', 'monday_gate', 'advance_to_mcq'],\n    nextStepLabel: 'MCQ',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'MCQ': {\n    allowedActions: ['collect_mcq_prompt', 'deliver_mcqs', 'request_revision', 'dropbox_gate', 'monday_gate', 'advance_to_slides'],\n    nextStepLabel: 'SLIDES',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'SLIDES': {\n    allowedActions: ['collect_outline', 'deliver_slides', 'gamma_gate', 'storage_monday_gate', 'advance_to_script'],\n    nextStepLabel: 'SCRIPT',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'SCRIPT': {\n    allowedActions: ['collect_script_prompt', 'deliver_script', 'dropbox_gate', 'monday_gate', 'advance_to_flashcards'],\n    nextStepLabel: 'FLASHCARDS',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'FLASHCARDS': {\n    allowedActions: ['collect_flashcard_prompt', 'deliver_flashcards', 'dropbox_gate', 'advance_to_closeout'],\n    nextStepLabel: 'CLOSEOUT',\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  },\n  'CLOSEOUT': {\n    allowedActions: ['finalize', 'monday_complete'],\n    nextStepLabel: null,\n    phaseGateRequired: true,\n    errorIfSkip: 'Phase gate not cleared. User must confirm YES before advancing.'\n  }\n};\n\nconst currentPhaseUpper = (currentPhase || 'INITIATION').toUpperCase();\nconst currentIndex = phaseOrder.indexOf(currentPhaseUpper);\n\nif (currentIndex === -1) {\n  return JSON.stringify({ error: 'Unknown phase: ' + currentPhase + '. Valid phases: ' + phaseOrder.join(', ') });\n}\n\n// Block phase-skipping attempts\nconst advanceIntents = ['PHASE_TRANSITION_REQUEST', 'PROCESS_CLOSEOUT'];\nconst skipAttemptIntents = ['PROMPT_MCQ_GENERATION', 'PROMPT_SLIDE_OUTLINE', 'PROMPT_SCRIPT_NARRATION', 'PROMPT_FLASHCARD_GUIDE'];\n\nconst phaseForIntent = {\n  'PROMPT_MCQ_GENERATION': 'MCQ',\n  'PROMPT_SLIDE_OUTLINE': 'SLIDES',\n  'PROMPT_SCRIPT_NARRATION': 'SCRIPT',\n  'PROMPT_FLASHCARD_GUIDE': 'FLASHCARDS'\n};\n\nif (skipAttemptIntents.includes(intent)) {\n  const requiredPhase = phaseForIntent[intent];\n  if (currentPhaseUpper !== requiredPhase) {\n    const requiredIndex = phaseOrder.indexOf(requiredPhase);\n    if (currentIndex < requiredIndex) {\n      return JSON.stringify({\n        error: 'Phase gate not cleared. User must confirm YES before advancing.',\n        currentPhase: currentPhaseUpper,\n        requiredPhase: requiredPhase,\n        message: 'Cannot execute ' + intent + ' while in phase ' + currentPhaseUpper + '. Complete all prior phases first.'\n      });\n    }\n  }\n}\n\nconst phaseConfig = phaseActions[currentPhaseUpper];\n\nreturn JSON.stringify({\n  allowedActions: phaseConfig.allowedActions,\n  nextStepLabel: phaseConfig.nextStepLabel,\n  phaseGateRequired: phaseConfig.phaseGateRequired,\n  currentPhase: currentPhaseUpper,\n  currentPhaseIndex: currentIndex,\n  totalPhases: phaseOrder.length,\n  phaseOrder: phaseOrder\n});"
+      }
+    },
+    {
+      "id": "monday-tool",
+      "name": "monday_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1140, 520],
+      "parameters": {
+        "name": "monday_tool",
+        "description": "Interacts with the Monday.com Content Production board. ONLY call this after the user explicitly confirms YES. Supported actions: updateStatus (update Content Status column), addComment (add formatted comment to item), setDueDate (set due date), createSubtask (create subtask). Required inputs: action (string), studyUnitId (string), statusValue (string, one of: 'In Progress', 'Textbook is Ready for Review', 'MCQs Ready for Review', 'Slides Ready for Review', 'Slide Script Ready for Review', 'Complete'). Optional: dueDate (YYYY-MM-DD), comment (string), subtaskName (string).",
+        "method": "POST",
+        "url": "https://api.monday.com/v2",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mondayComApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "API-Version",
+              "value": "2023-10"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ /*\n  The agent constructs the appropriate GraphQL mutation based on the action parameter.\n  Example for updateStatus:\n  mutation { change_column_value(board_id: 18398486903, item_id: ITEM_ID, column_id: \"status\", value: \"{\\\"label\\\":\\\"STATUS_VALUE\\\"}\") { id } }\n*/ $json.query }}"
+            }
+          ]
+        },
+        "optimizeResponse": true,
+        "responseType": "json"
+      },
+      "credentials": {
+        "mondayComApi": {
+          "id": "monday-com-api-credential",
+          "name": "Monday.com API"
+        }
+      }
+    },
+    {
+      "id": "dropbox-tool",
+      "name": "dropbox_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1260, 520],
+      "parameters": {
+        "name": "dropbox_tool",
+        "description": "Uploads files to Dropbox or creates folders. ONLY call this after the user explicitly confirms YES. Supported actions: uploadFile (upload an artifact), createFolder (create folder if not exists). Path convention: /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/. File naming: {studyUnitId}_{contentType}_{YYYY-MM-DD}.{ext}. Content types: textbook (.pdf/.docx), mcqs (.xlsx WATU Pro 11-column), slides (.pdf or Gamma URL .txt), script (.docx), flashcards (.pdf/.xlsx). Required inputs: action (string), filePath (string), fileName (string), fileContent (base64 or URL), contentType (string).",
+        "method": "POST",
+        "url": "https://content.dropboxapi.com/2/files/upload",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "dropboxApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/octet-stream"
+            },
+            {
+              "name": "Dropbox-API-Arg",
+              "value": "={{ JSON.stringify({ path: $json.filePath + '/' + $json.fileName, mode: 'add', autorename: true, mute: false }) }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.fileContent }}",
+        "optimizeResponse": true,
+        "responseType": "json"
+      },
+      "credentials": {
+        "dropboxApi": {
+          "id": "dropbox-oauth2-credential",
+          "name": "Dropbox OAuth2"
+        }
+      }
+    },
+    {
+      "id": "gamma-tool",
+      "name": "gamma_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1380, 520],
+      "parameters": {
+        "name": "gamma_tool",
+        "description": "Creates or exports Gamma presentations. ONLY call this during Phase 3 and ONLY after explicit YES from user. Action: createPresentation — creates a new presentation in Gamma using the Hock International theme. Input: { action: 'createPresentation', title: string, outlineContent: string, theme: 'Hock International' }. Returns: { presentationUrl, presentationId }. For export action, use action: 'exportPptx' with presentationId.",
+        "method": "POST",
+        "url": "https://api.gamma.app/v1/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "={{ $json.title }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.outlineContent }}"
+            },
+            {
+              "name": "theme",
+              "value": "Hock International"
+            }
+          ]
+        },
+        "optimizeResponse": true,
+        "responseType": "json"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gamma-api-credential",
+          "name": "Gamma API"
+        }
+      }
+    },
+    {
+      "id": "respond-200",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ agentResponse: $json.output, nextPhase: $json.nextPhase || null, awaitingConfirmation: $json.awaitingConfirmation || false, sessionId: $('Validate Payload').first().json.sessionId, studyUnitId: $('Validate Payload').first().json.studyUnitId }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "error-trigger",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [800, 700],
+      "parameters": {}
+    },
+    {
+      "id": "error-logger",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1020, 700],
+      "parameters": {
+        "method": "POST",
+        "url": "https://[YOUR-LOGGING-ENDPOINT]/hock-agent-errors",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflowId",
+              "value": "={{ $workflow.id }}"
+            },
+            {
+              "name": "executionId",
+              "value": "={{ $execution.id }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            },
+            {
+              "name": "errorMessage",
+              "value": "={{ $json.error.message }}"
+            },
+            {
+              "name": "nodeName",
+              "value": "={{ $json.error.node?.name }}"
+            },
+            {
+              "name": "sessionId",
+              "value": "={{ $json.error.context?.sessionId || 'unknown' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "error-respond",
+      "name": "Respond 500 Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1240, 700],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'An error occurred processing your request. The team has been notified. Please retry or contact support.', errorId: $execution.id }) }}",
+        "options": {
+          "responseCode": 500,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Payload": {
+      "main": [
+        [
+          {
+            "node": "Is Payload Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Payload Valid?": {
+      "main": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HOCK Content Production Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "phase_router": {
+      "ai_tool": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "monday_tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_tool",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "dropbox_tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_tool",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "gamma_tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "HOCK Content Production Agent",
+            "type": "ai_tool",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 500 Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "versionId": "1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "hock-content-production-agent"
+  },
+  "id": "hock-content-production-agent",
+  "tags": [
+    {
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z",
+      "id": "hock-tag",
+      "name": "HOCK International"
+    }
+  ]
+}
