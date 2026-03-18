@@ -84,6 +84,7 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        addComment      — add formatted comment to item
        setDueDate      — set due date on item
        createSubtask   — create subtask under parent item
+       attachFile      — upload a file to a File-type column on an item (see below)
    - Status values (exact strings):
        "In Progress"                    — set when a phase begins
        "Textbook is Ready for Review"   — set after Phase 1 Dropbox upload confirmed
@@ -97,12 +98,32 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        "Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}."
    - Required input fields: itemId (from session state), action, statusValue
 
+   FILE UPLOAD IMPLEMENTATION (attachFile action):
+   - Use a SEPARATE HTTP Request node named "Monday File Upload" (NOT the standard GraphQL endpoint)
+   - Endpoint: https://api.monday.com/v2/file
+   - Method: POST
+   - Authentication: Header — "Authorization: {mondayApiKey}" (no "Bearer" prefix for Monday API)
+   - Body type: Form-Data / Multipart
+   - Form fields:
+       query     → (text) mutation ($file: File!) { add_file_to_column(item_id: {{itemId}}, column_id: "{{columnId}}", file: $file) { id } }
+       variables[file] → (binary) the actual file binary from previous node (e.g., from Dropbox download or in-memory buffer)
+   - Column IDs to use per content type (look up actual IDs from board schema at build time):
+       Textbook file column  → stored as textbookFileColumnId in workflow config
+       MCQ file column       → stored as mcqFileColumnId in workflow config
+       Slides file column    → stored as slidesFileColumnId in workflow config
+       Script file column    → stored as scriptFileColumnId in workflow config
+   - File binary source: retrieve the file from Dropbox (dropbox_tool downloadFile action) immediately
+     before calling this node — pipe the binary output directly into variables[file]
+   - On success: returns { id } of the asset; store as mondayAssetId in session state
+   - On failure: pass to ERROR HANDLER; never silently skip the upload
+
 5. DROPBOX TOOL (HTTP Request Node as tool)
    - Name: dropbox_tool
    - Credential: "Dropbox OAuth2"
    - Trigger: ONLY called AFTER user confirms YES — never auto-triggered
    - Actions supported:
        uploadFile      — upload artifact to Dropbox
+       downloadFile    — download a previously uploaded file as binary (used to pipe into Monday file upload)
        createFolder    — create folder if it does not exist
    - Path convention:
        /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/
@@ -250,16 +271,23 @@ Step 1.5 — Monday Gate [GATE]
   Agent says (exact):
     "Would you like me to update the Monday task status to reflect that
     the textbook is complete?"
-  On YES: Call monday_tool with:
-    - Status: "Textbook is Ready for Review"
-    - Assignee/Person: brian@hockinternational.com
-    - Start Date: today's date
-    - Due Date: today's date + 2 days
-    - Description: Append "Textbook added/updated: {textbookName} - {section}.
-      Added/updated on {datetime} EST. Source: Generated in Claude project."
-    - File: attach most recent textbook file from session
-    Search by exact task name; if no match found, do NOT create — ask user.
-    Return: updated item ID, direct link, confirmation of all updated fields.
+  On YES: Execute these steps IN ORDER:
+    1. Call monday_tool (updateColumns) to set:
+       - Status: "Textbook is Ready for Review"
+       - Assignee/Person: brian@hockinternational.com
+       - Start Date: today's date
+       - Due Date: today's date + 2 days
+       - Description: Append "Textbook added/updated: {textbookName} - {section}.
+         Added/updated on {datetime} EST. Source: Generated in Claude project."
+       Search by exact task name; if no match found, do NOT create — ask user.
+    2. Call dropbox_tool (downloadFile) to retrieve the textbook binary from Dropbox
+       (use the dropboxPath stored in session state from Step 1.4).
+    3. Call monday_tool (attachFile) to upload the binary to the Textbook file column:
+       - itemId: from session state (mondayItemId)
+       - columnId: textbookFileColumnId
+       - file binary: output from step 2
+    Return: updated item ID, direct link, confirmation of all updated fields
+    including file attachment confirmation.
   On NO: Stay in Phase 1, note that Monday was not updated.
 
 Phase 1 Exit:
@@ -306,16 +334,23 @@ Step 2.3 — MCQ Dropbox Gate [GATE]
 Step 2.4 — Monday Gate [GATE]
   Agent says (exact):
     "Would you like me to update the MCQ status in Monday?"
-  On YES: Call monday_tool with:
-    - Status: "MCQs Ready for Review"
-    - Assignee/Person: session creator email
-    - Start Date: today's date
-    - Due Date: today's date + 2 days
-    - Description: Append "MCQs added/updated: {textbookName} - {section}.
-      Added/updated on {datetime} EST. Source: Generated in Claude project."
-    - File: attach most recent MCQ file (.xlsx) from session
-    Search by exact task name; if no match found, do NOT create — ask user.
-    Return: updated item ID, direct link, confirmation of all updated fields.
+  On YES: Execute these steps IN ORDER:
+    1. Call monday_tool (updateColumns) to set:
+       - Status: "MCQs Ready for Review"
+       - Assignee/Person: session creator email
+       - Start Date: today's date
+       - Due Date: today's date + 2 days
+       - Description: Append "MCQs added/updated: {textbookName} - {section}.
+         Added/updated on {datetime} EST. Source: Generated in Claude project."
+       Search by exact task name; if no match found, do NOT create — ask user.
+    2. Call dropbox_tool (downloadFile) to retrieve the MCQ .xlsx binary from Dropbox
+       (use the dropboxPath stored in session state from Step 2.3).
+    3. Call monday_tool (attachFile) to upload the binary to the MCQ file column:
+       - itemId: from session state (mondayItemId)
+       - columnId: mcqFileColumnId
+       - file binary: output from step 2
+    Return: updated item ID, direct link, confirmation of all updated fields
+    including file attachment confirmation.
 
 Phase 2 Exit:
   Agent says: "MCQ creation is complete. The next phase is slide and
