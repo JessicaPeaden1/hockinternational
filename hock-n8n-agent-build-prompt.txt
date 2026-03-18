@@ -84,6 +84,7 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        addComment      — add formatted comment to item
        setDueDate      — set due date on item
        createSubtask   — create subtask under parent item
+       uploadFile      — attach a file to a Monday.com file column (see section 4a below)
    - Status values (exact strings):
        "In Progress"                    — set when a phase begins
        "Textbook is Ready for Review"   — set after Phase 1 Dropbox upload confirmed
@@ -96,6 +97,54 @@ Build ALL of the following n8n nodes in a single workflow JSON:
    - Comment format:
        "Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}."
    - Required input fields: itemId (from session state), action, statusValue
+
+4a. MONDAY.COM FILE UPLOAD (Execute Workflow Node — Sub-Workflow)
+   - Sub-workflow file: monday-file-upload-subworkflow.json
+   - Purpose: Attach a file (Excel, PDF, DOCX, PPTX) to a Monday.com file column.
+     Monday.com requires a separate multipart/form-data POST to https://api.monday.com/v2/file
+     using the add_file_to_column GraphQL mutation. This CANNOT be done with a simple
+     column value update — it requires a dedicated Execute Workflow node in n8n.
+
+   - How it works (3 steps inside sub-workflow):
+       1. Call Dropbox /2/files/get_temporary_link to get a one-time download URL
+       2. Download the file binary from that URL
+       3. POST multipart/form-data to https://api.monday.com/v2/file with:
+            query  = mutation ($file: File!) { add_file_to_column(item_id: ITEM_ID, column_id: "COLUMN_ID", file: $file) { id } }
+            variables[file] = <binary file data>
+
+   - Sub-workflow input fields (all required):
+       itemId            — Monday.com item ID (integer, from session state mondayItemId)
+       dropboxPath       — Full Dropbox path, e.g. /HOCK/CMA/SU5-2796/mcqs/CMA_SU5_2796_5a_MCQ_Final.xlsx
+       fileName          — File name with extension, e.g. CMA_SU5_2796_5a_MCQ_Final.xlsx
+       mondayColumnId    — Monday.com column ID for the file column (see column ID table below)
+       mondayApiToken    — From "Monday.com API" credential (api_token field)
+       dropboxAccessToken — From "Dropbox OAuth2" credential (access_token field)
+
+   - Monday.com file column IDs (configure by opening Monday board → column settings → get ID):
+       Textbook File column      → mondayColumnId: "files"        (CONFIRM in board — may differ)
+       MCQs File column          → mondayColumnId: "files_1"      (CONFIRM in board — may differ)
+       Presentation File column  → mondayColumnId: "files_2"      (CONFIRM in board — may differ)
+       Slide Script column       → mondayColumnId: "files_3"      (CONFIRM in board — may differ)
+     NOTE: Column IDs above are placeholders. To find actual IDs: in Monday.com open the board,
+     click the three-dot menu on the column header → "Column settings" → the ID is shown, OR
+     run: query { boards(ids: [18398486903]) { columns { id title type } } } against the API.
+
+   - When to call this (phase mapping):
+       Phase 1 close-out → upload textbook (.docx/.pdf) to Textbook File column
+       Phase 2 close-out → upload MCQ Excel (.xlsx) to MCQs File column
+       Phase 3 close-out → upload slides (.pptx) to Presentation File column
+       Phase 4 close-out → upload script (.docx/.md) to Slide Script column
+
+   - Calling sequence within a phase gate (example for Phase 2 / MCQs):
+       1. User confirms YES to "update Monday task"
+       2. Call monday_tool (updateStatus) → sets status, assignee, dates, description
+       3. Call monday_file_upload sub-workflow → attaches .xlsx to MCQs File column
+       4. Report both results back to user: "Monday task updated AND file attached."
+
+   - Error handling:
+       - If Dropbox path not found: report error, ask user to confirm path
+       - If Monday column ID wrong: report error with instructions to look up correct ID
+       - If token expired: report credential refresh needed
 
 5. DROPBOX TOOL (HTTP Request Node as tool)
    - Name: dropbox_tool
@@ -1253,6 +1302,59 @@ Phase | Step  | Prompt Name                          | Provider | Intent Label
 4     | 4.3   | Add Slide Script to Monday.com       | Agent    | (gate-triggered)
 5     | 5.1   | Flashcard Guide Prompt               | User     | PROMPT_FLASHCARD_GUIDE
 6     | Close | Close-Out Confirmation               | User     | PROCESS_CLOSEOUT
+
+================================================================================
+APPENDIX: MONDAY.COM FILE UPLOAD — SETUP & TROUBLESHOOTING
+================================================================================
+
+A. FIND YOUR MONDAY.COM FILE COLUMN IDs
+-----------------------------------------
+Run this GraphQL query once in the Monday.com API Playground (developer.monday.com/api-explorer)
+or via n8n HTTP Request node to discover all column IDs on the board:
+
+  query {
+    boards(ids: [18398486903]) {
+      columns {
+        id
+        title
+        type
+      }
+    }
+  }
+
+Look for columns with type = "file". Copy the id value for each and fill in the
+mondayColumnId table in section 4a above.
+
+B. N8N SETUP FOR FILE UPLOAD
+------------------------------
+1. Import monday-file-upload-subworkflow.json into n8n as a new workflow.
+2. Activate the sub-workflow (it uses Execute Workflow Trigger — no webhook needed).
+3. In the main agent workflow, add an "Execute Workflow" node for file uploads.
+   Configure it to call the sub-workflow by ID and pass all 6 required inputs.
+4. Wire it AFTER the monday_tool updateStatus call within each phase gate.
+
+C. TESTING THE EXCEL UPLOAD
+-----------------------------
+To test Phase 2 (MCQ Excel) upload manually:
+1. Ensure the .xlsx file is in Dropbox at the correct path:
+   /HOCK/{certificationProgram}/{studyUnitId}/mcqs/{fileName}.xlsx
+2. Find the Monday.com item ID for the task (visible in the item URL:
+   https://hock-international-company.monday.com/boards/18398486903/pulses/ITEM_ID)
+3. Run the sub-workflow with:
+   - itemId: <item ID from URL>
+   - dropboxPath: /HOCK/CMA/SU5-2796/mcqs/CMA_SU5_2796_5a_MCQ_Final.xlsx
+   - fileName: CMA_SU5_2796_5a_MCQ_Final.xlsx
+   - mondayColumnId: <file column ID from step A>
+   - mondayApiToken: <from Monday.com API credential>
+   - dropboxAccessToken: <from Dropbox OAuth2 credential>
+
+D. DROPBOX TOKEN NOTE
+----------------------
+The sub-workflow uses a direct access token. If using Dropbox OAuth2 in n8n,
+retrieve the token from the credential store using n8n's expression:
+  {{ $credentials.dropboxOAuth2Api.oauthTokenData.access_token }}
+Alternatively, use a Dropbox app with a long-lived token and store it as a
+plain-text credential.
 
 ================================================================================
 END OF BUILD PROMPT

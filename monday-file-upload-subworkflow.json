@@ -1,0 +1,232 @@
+{
+  "name": "Monday.com - File Upload to Column (Sub-Workflow)",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputData",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "itemId",
+              "type": "string"
+            },
+            {
+              "name": "dropboxPath",
+              "type": "string"
+            },
+            {
+              "name": "fileName",
+              "type": "string"
+            },
+            {
+              "name": "mondayColumnId",
+              "type": "string"
+            },
+            {
+              "name": "mondayApiToken",
+              "type": "string"
+            },
+            {
+              "name": "dropboxAccessToken",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate required inputs\nconst { itemId, dropboxPath, fileName, mondayColumnId, mondayApiToken, dropboxAccessToken } = $input.first().json;\n\nconst missing = [];\nif (!itemId) missing.push('itemId');\nif (!dropboxPath) missing.push('dropboxPath');\nif (!fileName) missing.push('fileName');\nif (!mondayColumnId) missing.push('mondayColumnId');\nif (!mondayApiToken) missing.push('mondayApiToken');\nif (!dropboxAccessToken) missing.push('dropboxAccessToken');\n\nif (missing.length > 0) {\n  throw new Error(`Missing required inputs: ${missing.join(', ')}`);\n}\n\n// Determine MIME type from file extension\nconst ext = fileName.split('.').pop().toLowerCase();\nconst mimeTypes = {\n  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  xls: 'application/vnd.ms-excel',\n  pdf: 'application/pdf',\n  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  doc: 'application/msword',\n  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',\n  csv: 'text/csv'\n};\nconst mimeType = mimeTypes[ext] || 'application/octet-stream';\n\nreturn [{ json: { itemId, dropboxPath, fileName, mondayColumnId, mondayApiToken, dropboxAccessToken, mimeType } }];"
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000002",
+      "name": "Validate & Prepare Inputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dropboxapi.com/2/files/get_temporary_link",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.dropboxAccessToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ path: $json.dropboxPath }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000003",
+      "name": "Get Dropbox Temp Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge temp link with upstream data\nconst upstream = $('Validate & Prepare Inputs').first().json;\nconst { link } = $input.first().json;\n\nif (!link) {\n  throw new Error('Dropbox did not return a temporary download link. Check that the file path is correct and the token has files.content.read permission.');\n}\n\nreturn [{ json: { ...upstream, dropboxTempLink: link } }];"
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000004",
+      "name": "Merge Link With Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.dropboxTempLink }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "fileData"
+            }
+          }
+        }
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000005",
+      "name": "Download File from Dropbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rename the binary data key to 'uploadFile' for the Monday upload step\nconst context = $('Merge Link With Context').first().json;\nconst binaryData = $input.first().binary;\n\nif (!binaryData || !binaryData.fileData) {\n  throw new Error('File download from Dropbox returned no binary data.');\n}\n\n// Rename binary key\nconst renamedBinary = { uploadFile: { ...binaryData.fileData, fileName: context.fileName, mimeType: context.mimeType } };\n\nreturn [{ json: context, binary: renamedBinary }];"
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000006",
+      "name": "Rename Binary Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.monday.com/v2/file",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.mondayApiToken }}"
+            },
+            {
+              "name": "API-Version",
+              "value": "2024-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "=mutation ($file: File!) { add_file_to_column(item_id: {{ $json.itemId }}, column_id: \"{{ $json.mondayColumnId }}\", file: $file) { id } }",
+              "parameterType": "formData"
+            },
+            {
+              "name": "variables[file]",
+              "value": "uploadFile",
+              "parameterType": "n8n-nodes-base.httpRequest.bodyParameterTypes.formBinaryData"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000007",
+      "name": "Upload File to Monday Column",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst uploadResult = $input.first().json;\nconst context = $('Rename Binary Key').first().json;\n\nif (uploadResult.errors) {\n  throw new Error(`Monday.com API error: ${JSON.stringify(uploadResult.errors)}`);\n}\n\nconst mondayFileId = uploadResult?.data?.add_file_to_column?.id;\n\nreturn [{\n  json: {\n    success: true,\n    mondayFileId,\n    itemId: context.itemId,\n    columnId: context.mondayColumnId,\n    fileName: context.fileName,\n    dropboxPath: context.dropboxPath,\n    message: `File '${context.fileName}' successfully uploaded to Monday.com item ${context.itemId}, column '${context.mondayColumnId}'. File ID: ${mondayFileId}.`\n  }\n}];"
+      },
+      "id": "8a1b2c3d-0001-0001-0001-000000000008",
+      "name": "Build Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [{ "node": "Validate & Prepare Inputs", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate & Prepare Inputs": {
+      "main": [
+        [{ "node": "Get Dropbox Temp Link", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Dropbox Temp Link": {
+      "main": [
+        [{ "node": "Merge Link With Context", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Link With Context": {
+      "main": [
+        [{ "node": "Download File from Dropbox", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download File from Dropbox": {
+      "main": [
+        [{ "node": "Rename Binary Key", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rename Binary Key": {
+      "main": [
+        [{ "node": "Upload File to Monday Column", "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload File to Monday Column": {
+      "main": [
+        [{ "node": "Build Success Response", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["monday", "file-upload", "excel", "hock-international"],
+  "triggerCount": 0,
+  "updatedAt": "2026-03-18T00:00:00.000Z",
+  "versionId": "1"
+}
