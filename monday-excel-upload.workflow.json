@@ -1,0 +1,228 @@
+{
+  "name": "Upload Excel to Monday.com File Column",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "monday-upload-excel",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "binaryData": true
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "monday-upload-excel",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "webhook-auth",
+          "name": "Webhook Bearer Token"
+        }
+      },
+      "notes": "Send a multipart/form-data POST with fields: itemId, columnId, and 'file' (the .xlsx binary)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull itemId and columnId from form fields, file binary is in $input.first().binary.file\nconst body = $input.first().json;\nconst binary = $input.first().binary;\n\nif (!body.itemId) throw new Error('Missing field: itemId');\nif (!body.columnId) throw new Error('Missing field: columnId');\nif (!binary || !binary.file) throw new Error('Missing file binary. Send as multipart field named \\'file\\'');\n\nreturn [{\n  json: {\n    itemId: String(body.itemId),\n    columnId: String(body.columnId)\n  },\n  binary: {\n    file: binary.file\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.monday.com/v2/file",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $credentials.mondayApi.apiKey }}"
+            },
+            {
+              "name": "API-Version",
+              "value": "2024-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formData",
+              "name": "query",
+              "value": "=mutation ($file: File!) { add_file_to_column(item_id: {{ $json.itemId }}, column_id: \"{{ $json.columnId }}\", file: $file) { id } }"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "variables[file]",
+              "inputDataFieldName": "file"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-0005-0005-000000000005",
+      "name": "Upload to Monday",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "credentials": {
+        "mondayApi": {
+          "id": "monday-api",
+          "name": "Monday.com API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-success",
+              "leftValue": "={{ $json.data.add_file_to_column.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "Upload Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"mondayAssetId\": {{ $json.data.add_file_to_column.id }},\n  \"itemId\": \"{{ $('Validate Input').first().json.itemId }}\",\n  \"columnId\": \"{{ $('Validate Input').first().json.columnId }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1b2c3d4-0006-0006-0006-000000000006",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"{{ $json.error_message || $json.message || 'Upload failed — check itemId, columnId, and that the column is a File type' }}\"\n}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "a1b2c3d4-0007-0007-0007-000000000007",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 420]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Upload to Monday",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Monday": {
+      "main": [
+        [
+          {
+            "node": "Upload Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "_readme": {
+    "description": "Uploads an Excel (.xlsx) or any file directly to a Monday.com File-type column. No Dropbox required — send the file straight in the webhook request.",
+    "credentials_required": [
+      "Monday.com API — name it exactly: 'Monday.com API'",
+      "Webhook Bearer Token — name it exactly: 'Webhook Bearer Token' (any secret string)"
+    ],
+    "how_to_call": {
+      "method": "POST",
+      "url": "https://your-n8n-instance/webhook/monday-upload-excel",
+      "headers": {
+        "Authorization": "Bearer YOUR_WEBHOOK_SECRET",
+        "Content-Type": "multipart/form-data"
+      },
+      "form_fields": {
+        "itemId": "Monday item ID (number) — find it in the item URL or via API",
+        "columnId": "Monday file column ID (string) — e.g. 'files', 'files7', etc. Check board schema",
+        "file": "(binary) the actual .xlsx file"
+      }
+    },
+    "example_curl": "curl -X POST https://your-n8n/webhook/monday-upload-excel -H 'Authorization: Bearer YOUR_SECRET' -F 'itemId=1234567890' -F 'columnId=files' -F 'file=@/path/to/mcqs.xlsx'"
+  }
+}
