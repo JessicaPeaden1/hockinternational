@@ -1,0 +1,231 @@
+{
+  "name": "MCQ → Monday.com File Upload",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## MCQ → Monday.com File Upload\n\n**Webhook**: POST `/webhook/mcq-upload`\n\n**Two paths supported**:\n\n**Path A — Claude Code sends pre-built base64 xlsx**\n(Claude Code ran code to generate a real .xlsx binary)\n```json\n{\n  \"sessionId\": \"abc123\",\n  \"itemId\": \"12345678\",\n  \"studyUnitId\": \"SU-2796\",\n  \"fileName\": \"SU-2796_mcqs_2026-03-19.xlsx\",\n  \"file_base64\": \"<base64 string of real .xlsx>\"\n}\n```\n→ Skips Build XLSX node, uploads directly\n\n**Path B — Agent sends MCQ JSON array**\n(n8n builds the xlsx here)\n```json\n{\n  \"sessionId\": \"abc123\",\n  \"itemId\": \"12345678\",\n  \"studyUnitId\": \"SU-2796\",\n  \"mcqs\": [\n    {\n      \"question_text\": \"...\",\n      \"choice_a\": \"Correct answer (always A)\",\n      \"choice_b\": \"...\", \"choice_c\": \"...\", \"choice_d\": \"...\",\n      \"correct_answer\": \"A\",\n      \"explanation\": \"...\",\n      \"bloom_level\": \"Application\",\n      \"topic\": \"...\",\n      \"study_unit\": \"SU-2796\"\n    }\n  ]\n}\n```\n→ Build XLSX node converts JSON → .xlsx, then uploads",
+        "height": 620,
+        "width": 460,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note: Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, -160]
+    },
+    {
+      "parameters": {
+        "content": "## ⚠️ One-Time Setup\n\n**Credentials** (must exist before import):\n- `Monday.com API` — Monday API token\n- Webhook bearer token — set on Webhook node\n\n**Enable xlsx package** (Path B only):\n\n_Self-hosted n8n_:\n```\nNODE_FUNCTION_ALLOW_EXTERNAL=xlsx\n```\nThen: `npm install xlsx`\n\n_n8n Cloud_: Settings → Community Nodes → install `xlsx`\n\n**If you always use Path A** (Claude Code generates the xlsx), the xlsx package is not needed.\n\n**Board/Column IDs** (hardcoded — do not change):\n- Board: `18398486903`\n- MCQs File col: `file_mm0vtzzb`\n- Status col: `color_mm07gpke`\n- Label 14 = \"MCQs Ready for Review\"",
+        "height": 460,
+        "width": 380,
+        "color": 3
+      },
+      "id": "sticky-setup",
+      "name": "Sticky Note: Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [680, -160]
+    },
+    {
+      "parameters": {
+        "content": "## Claude Code Agent Instructions\n\n**Path A — preferred (Claude Code context)**:\n```\nWhen MCQs are approved and user confirms upload:\n1. Generate the Excel file using the xlsx tool\n2. Read the file as base64\n3. Call webhook tool with:\n{\n  \"sessionId\": \"[sessionId]\",\n  \"itemId\": \"[Monday item ID from session]\",\n  \"studyUnitId\": \"[studyUnitId]\",\n  \"fileName\": \"[studyUnitId]_mcqs_[YYYY-MM-DD].xlsx\",\n  \"file_base64\": \"[base64 of the .xlsx file]\"\n}\n```\n\n**Path B — fallback (Projects/API context)**:\n```\nCall webhook with mcqs array instead.\nThe itemId is always in session state —\nnever ask the user for it.\nNEVER call without explicit user YES.\n```",
+        "height": 440,
+        "width": 380,
+        "color": 6
+      },
+      "id": "sticky-claude",
+      "name": "Sticky Note: Claude Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1100, -160]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mcq-upload",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook: MCQ Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 460],
+      "webhookId": "mcq-file-upload"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── VALIDATE & NORMALIZE ──────────────────────────────────────────────────\n// Accepts two payload shapes:\n//\n//  Path A — Pre-built xlsx (Claude Code generated a real binary):\n//    { sessionId, itemId, studyUnitId, fileName, file_base64 }\n//\n//  Path B — MCQ JSON array (n8n builds the xlsx):\n//    { sessionId, itemId, studyUnitId, mcqs: [...] }\n//\n// itemId always comes from the Claude agent session — no lookup needed.\n\nconst body = $json.body ?? $json;\n\n// itemId and studyUnitId are always required\nconst baseRequired = ['itemId', 'studyUnitId'];\nconst missing = baseRequired.filter(f => !body[f]);\n\nif (missing.length > 0) {\n  throw new Error(JSON.stringify({\n    error: 'Missing required fields',\n    missing,\n    received: Object.keys(body)\n  }));\n}\n\nconst today = new Date().toISOString().slice(0, 10);\nconst fileName = body.fileName ?? `${body.studyUnitId}_mcqs_${today}.xlsx`;\n\n// PATH A: pre-built base64 xlsx sent directly by Claude Code\nif (body.file_base64) {\n  return [{\n    json: {\n      path:        'A',\n      itemId:      String(body.itemId),\n      studyUnitId: body.studyUnitId,\n      sessionId:   body.sessionId ?? '',\n      fileName,\n      xlsxBase64:  body.file_base64,\n      rowCount:    null  // unknown without parsing\n    }\n  }];\n}\n\n// PATH B: MCQ JSON array — validate and normalize\nif (!body.mcqs || !Array.isArray(body.mcqs) || body.mcqs.length === 0) {\n  throw new Error(JSON.stringify({\n    error: 'Payload must include either file_base64 (Path A) or a non-empty mcqs array (Path B)',\n    received: Object.keys(body)\n  }));\n}\n\n// Normalize to WATU Pro 11-column format\nconst mcqRows = body.mcqs.map((q, i) => ({\n  '#':              i + 1,\n  'Question':       q.question_text  ?? q.question  ?? '',\n  'Choice A':       q.choice_a       ?? q.option_a  ?? '',\n  'Choice B':       q.choice_b       ?? q.option_b  ?? '',\n  'Choice C':       q.choice_c       ?? q.option_c  ?? '',\n  'Choice D':       q.choice_d       ?? q.option_d  ?? '',\n  'Correct Answer': q.correct_answer ?? 'A',\n  'Explanation':    q.explanation    ?? '',\n  'Bloom Level':    q.bloom_level    ?? '',\n  'Topic':          q.topic          ?? '',\n  'Study Unit':     q.study_unit     ?? body.studyUnitId ?? ''\n}));\n\nreturn [{\n  json: {\n    path:        'B',\n    itemId:      String(body.itemId),\n    studyUnitId: body.studyUnitId,\n    sessionId:   body.sessionId ?? '',\n    fileName,\n    rowCount:    mcqRows.length,\n    mcqRows\n  }\n}];"
+      },
+      "id": "validate",
+      "name": "Validate & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 460],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "path-check",
+              "leftValue": "={{ $json.path }}",
+              "rightValue": "A",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-path",
+      "name": "Route: Pre-built or Build?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── BUILD XLSX BINARY (Path B only) ──────────────────────────────────────\n// Only runs when agent sent a JSON mcqs array instead of a pre-built file.\n//\n// Requires xlsx npm package:\n//   Self-hosted n8n: NODE_FUNCTION_ALLOW_EXTERNAL=xlsx + npm install xlsx\n//   n8n Cloud: Settings → Community Nodes → install 'xlsx'\n\nconst XLSX = require('xlsx');\n\nconst { itemId, studyUnitId, sessionId, fileName, rowCount, mcqRows } = $json;\n\nconst wb = XLSX.utils.book_new();\nconst ws = XLSX.utils.json_to_sheet(mcqRows);\n\nws['!cols'] = [\n  { wch: 4  },  // #\n  { wch: 80 },  // Question\n  { wch: 45 },  // Choice A\n  { wch: 45 },  // Choice B\n  { wch: 45 },  // Choice C\n  { wch: 45 },  // Choice D\n  { wch: 14 },  // Correct Answer\n  { wch: 80 },  // Explanation\n  { wch: 16 },  // Bloom Level\n  { wch: 30 },  // Topic\n  { wch: 12 }   // Study Unit\n];\n\nXLSX.utils.book_append_sheet(wb, ws, 'MCQs');\n\nconst xlsxBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });\n\nreturn [{\n  json: { itemId, studyUnitId, sessionId, fileName, rowCount, xlsxBase64 }\n}];"
+      },
+      "id": "build-xlsx",
+      "name": "Build XLSX",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 580],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── UPLOAD FILE TO MONDAY.COM ─────────────────────────────────────────────\n// Runs for both Path A and Path B — both arrive here with xlsxBase64.\n//\n// Monday requires multipart/form-data POST to /v2/file (NOT /v2).\n// Standard JSON GraphQL calls do not support file uploads.\n//\n// Board:  HOCK International Content Production (18398486903)\n// Column: MCQs File (file_mm0vtzzb)\n\nconst credentials = await this.getCredentials('mondayComApi');\nconst token = credentials.apiToken;\n\nconst { itemId, fileName, xlsxBase64, studyUnitId, sessionId, rowCount } = $json;\n\nconst fileBuffer = Buffer.from(xlsxBase64, 'base64');\n\nconst COLUMN_ID = 'file_mm0vtzzb';\n\nconst mutation = `mutation ($file: File!) {\n  add_file_to_column(\n    item_id: ${itemId},\n    column_id: \"${COLUMN_ID}\",\n    file: $file\n  ) { id }\n}`;\n\n// Monday GraphQL multipart spec:\n//   Part \"query\" → the mutation string\n//   Part \"map\"   → maps part name \"0\" to variables.file\n//   Part \"0\"     → the actual file binary\nconst boundary = `----MCQUpload${Date.now()}`;\nconst CRLF = '\\r\\n';\n\nconst queryPart =\n  `--${boundary}${CRLF}` +\n  `Content-Disposition: form-data; name=\"query\"${CRLF}${CRLF}` +\n  `${mutation}${CRLF}`;\n\nconst mapPart =\n  `--${boundary}${CRLF}` +\n  `Content-Disposition: form-data; name=\"map\"${CRLF}${CRLF}` +\n  `{\"0\": [\"variables.file\"]}${CRLF}`;\n\nconst fileHeader =\n  `--${boundary}${CRLF}` +\n  `Content-Disposition: form-data; name=\"0\"; filename=\"${fileName}\"${CRLF}` +\n  `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet${CRLF}${CRLF}`;\n\nconst closing = `${CRLF}--${boundary}--`;\n\nconst fullBody = Buffer.concat([\n  Buffer.from(queryPart + mapPart + fileHeader, 'utf8'),\n  fileBuffer,\n  Buffer.from(closing, 'utf8')\n]);\n\nconst response = await this.helpers.httpRequest({\n  method:  'POST',\n  url:     'https://api.monday.com/v2/file',\n  headers: {\n    'Authorization': token,\n    'Content-Type':  `multipart/form-data; boundary=${boundary}`,\n    'API-Version':   '2024-01'\n  },\n  body:               fullBody,\n  returnFullResponse: true\n});\n\nif (response.statusCode !== 200) {\n  throw new Error(`Monday upload failed [${response.statusCode}]: ${JSON.stringify(response.body)}`);\n}\n\nconst result = typeof response.body === 'string'\n  ? JSON.parse(response.body)\n  : response.body;\n\nif (result.errors?.length) {\n  throw new Error(`Monday GraphQL error: ${JSON.stringify(result.errors)}`);\n}\n\nreturn [{\n  json: {\n    itemId,\n    studyUnitId,\n    sessionId,\n    fileName,\n    rowCount:    rowCount ?? 'n/a',\n    mondayFileId: result?.data?.add_file_to_column?.id ?? null\n  }\n}];"
+      },
+      "id": "upload-monday",
+      "name": "Upload to Monday",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 460],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.monday.com/v2",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mondayComApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "API-Version", "value": "2024-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query\": \"mutation { change_column_value(board_id: 18398486903, item_id: {{ $json.itemId }}, column_id: \\\"color_mm07gpke\\\", value: \\\"{\\\\\\\"index\\\\\\\": 14}\\\") { id } }\"\n}",
+        "options": {}
+      },
+      "id": "update-status",
+      "name": "Update Status: MCQs Ready for Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 460],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"message\": \"MCQ file uploaded and status updated\",\n  \"itemId\": \"{{ $('Upload to Monday').item.json.itemId }}\",\n  \"studyUnitId\": \"{{ $('Upload to Monday').item.json.studyUnitId }}\",\n  \"fileName\": \"{{ $('Upload to Monday').item.json.fileName }}\",\n  \"rowCount\": \"{{ $('Upload to Monday').item.json.rowCount }}\",\n  \"mondayFileId\": \"{{ $('Upload to Monday').item.json.mondayFileId }}\"\n}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-success",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format error for clean webhook response\nconst errorData = $json.error ?? {};\nconst message = typeof errorData === 'string'\n  ? errorData\n  : (errorData.message ?? JSON.stringify(errorData));\n\nlet parsed = {};\ntry   { parsed = JSON.parse(message); }\ncatch { parsed = { error: message };  }\n\nreturn [{\n  json: {\n    errorMessage: parsed.error    ?? message,\n    missing:      parsed.missing  ?? [],\n    received:     parsed.received ?? []\n  }\n}];"
+      },
+      "id": "format-error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 680]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"error\",\n  \"error\": \"{{ $json.errorMessage }}\",\n  \"missing\": {{ JSON.stringify($json.missing) }},\n  \"received\": {{ JSON.stringify($json.received) }}\n}",
+        "options": { "responseCode": 400 }
+      },
+      "id": "respond-error",
+      "name": "Respond: Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1180, 680]
+    }
+  ],
+  "connections": {
+    "Webhook: MCQ Upload": {
+      "main": [
+        [{ "node": "Validate & Normalize", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate & Normalize": {
+      "main": [
+        [{ "node": "Route: Pre-built or Build?", "type": "main", "index": 0 }],
+        [{ "node": "Format Error",               "type": "main", "index": 0 }]
+      ]
+    },
+    "Route: Pre-built or Build?": {
+      "main": [
+        [{ "node": "Upload to Monday", "type": "main", "index": 0 }],
+        [{ "node": "Build XLSX",        "type": "main", "index": 0 }]
+      ]
+    },
+    "Build XLSX": {
+      "main": [
+        [{ "node": "Upload to Monday", "type": "main", "index": 0 }],
+        [{ "node": "Format Error",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload to Monday": {
+      "main": [
+        [{ "node": "Update Status: MCQs Ready for Review", "type": "main", "index": 0 }],
+        [{ "node": "Format Error",                         "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Status: MCQs Ready for Review": {
+      "main": [
+        [{ "node": "Respond: Success", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [{ "node": "Respond: Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "HOCK" },
+    { "name": "MCQ" },
+    { "name": "Monday.com" }
+  ],
+  "pinData": {},
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  }
+}
