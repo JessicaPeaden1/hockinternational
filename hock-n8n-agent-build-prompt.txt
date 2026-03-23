@@ -80,10 +80,11 @@ Build ALL of the following n8n nodes in a single workflow JSON:
    - Board: "HOCK International Content Production"
    - Trigger: ONLY called AFTER user confirms YES — never auto-triggered
    - Actions supported:
-       updateStatus    — update "Content Status" column on item
-       addComment      — add formatted comment to item
-       setDueDate      — set due date on item
-       createSubtask   — create subtask under parent item
+       updateStatus        — update "Content Status" column on item
+       addComment          — add formatted comment to item
+       setDueDate          — set due date on item
+       createSubtask       — create subtask under parent item
+       updateMCQMarkdown   — write TSV MCQ content to "MCQs Markdown" long-text column
    - Status values (exact strings):
        "In Progress"                    — set when a phase begins
        "Textbook is Ready for Review"   — set after Phase 1 Dropbox upload confirmed
@@ -96,6 +97,14 @@ Build ALL of the following n8n nodes in a single workflow JSON:
    - Comment format:
        "Phase {N} complete. {contentType} saved to Dropbox at {dropboxPath}. Date: {date}."
    - Required input fields: itemId (from session state), action, statusValue
+   - For updateMCQMarkdown:
+       * GraphQL mutation: change_column_value
+       * board_id: 18398486903
+       * column_id: column ID for "MCQs Markdown" (long-text type — confirm ID in Monday first)
+       * value format: {"text": "{tsvContent}"}
+       * tsvContent: full tab-separated MCQ output (header row + all question rows)
+       * Escape all double-quotes in tsvContent as \" before injecting into JSON value
+       * On success: return { itemId, columnUpdated: "MCQs Markdown", rowCount }
 
 5. DROPBOX TOOL (HTTP Request Node as tool)
    - Name: dropbox_tool
@@ -303,6 +312,22 @@ Step 2.3 — MCQ Dropbox Gate [GATE]
     "Are these MCQs approved and ready to be saved to Dropbox?"
   On YES: Call dropbox_tool. File format: .xlsx (WATU Pro 11-column).
 
+Step 2.3b — MCQs Markdown Gate [GATE]
+  Agent says (exact):
+    "Would you like me to save the MCQs as tab-separated text to the MCQs Markdown
+    column in Monday? This lets anyone copy and paste directly into Excel."
+  On YES:
+    1. Convert the approved MCQ set to TSV format (11 columns, header row first):
+       Category[TAB]Question ID[TAB]Question Text[TAB]Choice A[TAB]Choice B[TAB]
+       Choice C[TAB]Choice D[TAB]Explanation A[TAB]Explanation B[TAB]
+       Explanation C[TAB]Explanation D
+    2. Call monday_tool with action: updateMCQMarkdown
+    3. Return: "MCQs Markdown column updated. {rowCount} questions saved. You can
+       copy from Monday and paste directly into Excel."
+  On NO: Skip to Step 2.4.
+  Rule: Never put literal tab characters inside a cell value. If question text
+        contains tabs, replace them with a single space before writing.
+
 Step 2.4 — Monday Gate [GATE]
   Agent says (exact):
     "Would you like me to update the MCQ status in Monday?"
@@ -422,6 +447,7 @@ When user sends a message, classify intent as one of:
   PROMPT_MCQ_EXPLANATIONS     → Phase 2.2 revision
   PROMPT_MCQ_REGENERATE       → Phase 2.2 revision
   PROMPT_EXCEL_EXPORT         → Phase 2.2 convert to Excel
+  PROMPT_TSV_EXPORT           → Phase 2.3b save TSV to Monday MCQs Markdown column
   PROMPT_SLIDE_OUTLINE        → Phase 3.1 (execute immediately)
   PROMPT_SLIDE_GENERAL_REVISION → Phase 3.2 revision (fallback for mixed changes)
   PROMPT_SLIDE_VISUALS        → Phase 3.2 revision
@@ -514,6 +540,7 @@ SECTION 6 — MONDAY.COM FIELD MAPPINGS
 Board name:             "HOCK International Content Production"
 Status column name:     "Content Status"
 Study Unit ID column:   "Study Unit ID"
+MCQs Markdown column:   "MCQs Markdown" (long-text type — stores TSV for Excel copy-paste)
 
 Item lookup strategy:   Search by Study Unit ID in the "Study Unit ID"
                         custom column, or fall back to searching item name.
@@ -871,6 +898,26 @@ Columns:
 Category | Question ID | Question Text | Choice A | Choice B | Choice C | Choice D | Explanation for A | Explanation for B | Explanation for C | Explanation for D
 Use Category = [e.g., 2796] or whatever matches the textbook.
 Output as plain text table or tab-separated values ready for copy-paste to Excel.
+
+---
+
+[P2-2.2g] Save MCQs as TSV to Monday.com Prompt
+Provider: User | Where: Chat | Intent: PROMPT_TSV_EXPORT
+Purpose: Convert approved MCQs to tab-separated format and write to Monday "MCQs Markdown" column.
+
+Convert the previously generated (and approved) MCQs for [Section ID/Name] to TSV format
+and save to the MCQs Markdown column in Monday.com.
+
+Rules:
+- Output EXACTLY 11 tab-separated columns per row — no more, no less
+- Row 1 must be the header row:
+  Category[TAB]Question ID[TAB]Question Text[TAB]Choice A[TAB]Choice B[TAB]Choice C[TAB]Choice D[TAB]Explanation A[TAB]Explanation B[TAB]Explanation C[TAB]Explanation D
+- Each MCQ occupies exactly one row
+- Do NOT use tab characters inside any cell value — replace with a space if needed
+- Do NOT wrap values in quotes
+- Use Category = [e.g., 2796] matching the textbook section
+- After generating the TSV, call monday_tool with action: updateMCQMarkdown
+- Confirm to user: "MCQs Markdown column updated — {N} questions. Copy from Monday and paste into Excel to view."
 
 ---
 
@@ -1234,6 +1281,7 @@ Phase | Step  | Prompt Name                          | Provider | Intent Label
 2     | 2.2   | Adjust Explanations Prompt           | User     | PROMPT_MCQ_EXPLANATIONS
 2     | 2.2   | Regenerate Specific Questions Prompt | User     | PROMPT_MCQ_REGENERATE
 2     | 2.2   | Convert Batch to Excel Format Prompt | User     | PROMPT_EXCEL_EXPORT
+2     | 2.3b  | Save MCQs as TSV to Monday           | User     | PROMPT_TSV_EXPORT
 2     | 2.4   | Add MCQs to Monday.com               | Agent    | (gate-triggered)
 3     | 3.1   | Presentation Outline Prompt          | User     | PROMPT_SLIDE_OUTLINE
 3     | 3.2   | General Presentation Revision Prompt | User     | PROMPT_SLIDE_GENERAL_REVISION
