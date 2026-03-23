@@ -50,6 +50,8 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        userMessage       (string, exact user message)
        intent            (string, classified intent label — see Section 5)
        timestamp         (string, ISO 8601)
+   - Optional payload fields:
+       creatorEmail      (string, email of session creator — defaults to brian@hockinternational.com if absent)
    - On valid payload: pass to Agent Node
    - On invalid payload: return 400 with { error: "Invalid payload", missing: [...] }
    - On success: return 200 with { agentResponse, nextPhase, awaitingConfirmation }
@@ -90,6 +92,7 @@ Build ALL of the following n8n nodes in a single workflow JSON:
        "MCQs Ready for Review"          — set after Phase 2 Dropbox upload confirmed
        "Slides Ready for Review"        — set after Phase 3 approval
        "Slide Script Ready for Review"  — set after Phase 4 approval
+       "Flashcards Ready for Review"    — set after Phase 5 Dropbox upload confirmed
        "Complete"                       — set at Phase 6 close-out
    - Item lookup: search by Study Unit ID in item name or custom column "Study Unit ID"
    - Subtask name pattern: "{studyUnitId} — {phaseName} — {YYYY-MM-DD}"
@@ -104,6 +107,7 @@ Build ALL of the following n8n nodes in a single workflow JSON:
    - Actions supported:
        uploadFile      — upload artifact to Dropbox
        createFolder    — create folder if it does not exist
+       listFiles       — list files in a given path (used by Phase 6 close-out to verify all artifacts are present)
    - Path convention:
        /HOCK/{certificationProgram}/{studyUnitId}/{contentType}/
    - File naming convention:
@@ -178,16 +182,27 @@ CONVERSATION STYLE:
 PROMPT LIBRARY RULE:
   - User messages may contain full structured prompts from the Hock
     International prompt library.
-  - When a user pastes a named prompt, classify it immediately and execute
+  - When a user pastes a named prompt, classify it immediately and begin
     the mapped step.
   - Do NOT ask clarifying questions that the named prompt already answers.
-  - Receipt of a named prompt = explicit instruction to execute that step.
+    (Note: named prompts include built-in depth calibration — present the
+    depth table and await the user's YES/adjustments as specified within
+    the prompt. This is not an additional question; it is part of the step.)
+  - Receipt of a named prompt = explicit instruction to begin that step's
+    process, starting with any depth calibration the prompt specifies.
 
-CONTENT GENERATION RULE:
-  - Do NOT generate content yourself inside the tool.
-  - Content generation calls back to the Claude API using the project
-    skills and guides.
-  - This agent handles workflow state and tool execution only.
+CONTENT GENERATION RULE (applies to the n8n Agent Node only):
+  - The n8n agent does NOT generate textbook, MCQ, slide, script, or
+    flashcard content itself.
+  - Content generation happens in the Claude Project Chat using the
+    project skills and guides. The n8n agent handles workflow state,
+    gate decisions, and tool execution only.
+  - When a named prompt is received via webhook, the n8n agent updates
+    session state and returns the appropriate gate prompt — it does not
+    produce the content artifact.
+  - The phase execution instructions below (e.g., "Execute immediately",
+    "On receipt: generate") describe the behavior of Claude in the
+    Claude Project Chat, not this n8n agent node.
 
 ------------------------------------------------------------------------
 SESSION STATE (always maintained in memory)
@@ -195,6 +210,7 @@ SESSION STATE (always maintained in memory)
   currentPhase          — current phase label
   studyUnitId           — e.g. "SU-2796"
   certificationProgram  — CIA / CMA / CFE / CPA
+  creatorEmail          — email of session creator (from payload, default: brian@hockinternational.com)
   textbookStatus        — draft / finalized / uploaded
   mcqStatus             — draft / finalized / uploaded
   slideStatus           — draft / finalized / gamma_created / uploaded
@@ -215,6 +231,10 @@ Agent says (exact):
 
 Advance condition: User confirms YES — materials are ready.
 Restriction: Do NOT discuss MCQs, slides, scripts, or storage at this phase.
+
+Phase 0 → Phase 1 Transition:
+  On user YES: Set currentPhase = "TEXTBOOK" in session state.
+  Proceed directly to Phase 1 entry — no channel change required at this point.
 
 ------------------------------------------------------------------------
 PHASE 1 — TEXTBOOK CREATION
@@ -284,6 +304,12 @@ PHASE 2 — MCQ CREATION
 ------------------------------------------------------------------------
 Entry: Phase 1 complete.
 
+Entry Action (automatic):
+  Set currentPhase = "MCQ" in session state.
+  Call monday_tool with:
+    - Status: "In Progress"
+    Search by Study Unit ID. If not found, do NOT create — continue without Monday update.
+
 Step 2.1 — Awaiting MCQs Prompt
   Agent says (exact):
     "We're now in the MCQ phase. When you are ready, paste your MCQs
@@ -308,7 +334,7 @@ Step 2.4 — Monday Gate [GATE]
     "Would you like me to update the MCQ status in Monday?"
   On YES: Call monday_tool with:
     - Status: "MCQs Ready for Review"
-    - Assignee/Person: session creator email
+    - Assignee/Person: creatorEmail from session state (default: brian@hockinternational.com)
     - Start Date: today's date
     - Due Date: today's date + 2 days
     - Description: Append "MCQs added/updated: {textbookName} - {section}.
@@ -320,6 +346,21 @@ Step 2.4 — Monday Gate [GATE]
 Phase 2 Exit:
   Agent says: "MCQ creation is complete. The next phase is slide and
   presentation creation."
+
+Phase 2 → Phase 3 Transition:
+  Agent says (exact):
+    "Before we begin slide creation, would you like to move this work
+    to a new channel?"
+  If YES:
+    Agent immediately follows with:
+      "Would you like an overview of what has been completed in this
+      channel so far?"
+    If YES to overview: Deliver context recap (study unit ID, textbook status,
+    MCQ count, Dropbox path, Monday status). Do NOT begin slide discussion.
+    If NO to overview: Transition directly to Phase 3.
+  If NO: Set currentPhase = "SLIDES" in session state and proceed to Phase 3.
+  Restriction: Do NOT generate slide content or request slide parameters until
+  the new channel is confirmed active.
 
 ------------------------------------------------------------------------
 PHASE 3 — SLIDE / PRESENTATION CREATION
@@ -348,17 +389,35 @@ Step 3.4 — Storage & Monday Gate [GATE]
   Agent says (exact):
     "Should I store these finalized slides and update the Monday task?"
   On YES:
-    1. Call gamma_tool to export .pptx from Gamma presentation.
+    1. Call dropbox_tool to save the Gamma presentation URL as a .txt
+       reference file at the slides path (e.g., SU-2796_slides_YYYY-MM-DD.txt
+       containing the Gamma share URL). Gamma does not support direct .pptx
+       export via API — the URL reference is the canonical Dropbox artifact
+       for slides. User may export .pptx manually from Gamma if needed.
     2. Call monday_tool with:
        - Status: "Slides Ready for Review"
-       - Assignee/Person: session creator email
+       - Assignee/Person: brian@hockinternational.com
        - Due Date: today's date + 2 days
        - Presentation Link: Gamma share/edit URL (URL column)
-       - Presentation File: exported .pptx (File column)
-       - Description: Append "Slides created in Gamma and PowerPoint exported.
+       - Description: Append "Slides created in Gamma. Gamma URL saved to Dropbox.
          Added on {datetime} EST. Gamma link: {gammaUrl}. Source: Claude + Gamma."
        Search by exact task name; if no match found, do NOT create — ask user.
-       Return: updated item ID, direct link, Gamma URL, confirmation .pptx attached.
+       Return: updated item ID, direct link, Gamma URL, confirmation of all updated fields.
+
+Phase 3 → Phase 4 Transition:
+  Agent says (exact):
+    "Before we begin the slide script, would you like to move this work
+    to a new channel?"
+  If YES:
+    Agent immediately follows with:
+      "Would you like an overview of what has been completed in this
+      channel so far?"
+    If YES to overview: Deliver context recap (study unit ID, Gamma link,
+    Dropbox path, Monday status). Do NOT begin script discussion.
+    If NO to overview: Transition directly to Phase 4.
+  If NO: Set currentPhase = "SCRIPT" in session state and proceed to Phase 4.
+  Restriction: Do NOT generate script content or request script parameters
+  until the new channel is confirmed active (if moving) or user declines move.
 
 ------------------------------------------------------------------------
 PHASE 4 — SCRIPT CREATION
@@ -385,14 +444,55 @@ On approved:
         Added on {datetime} EST. Source: Claude narration script."
       Search by exact task name; if no match found, do NOT create — ask user.
 
+Phase 4 → Phase 5 Transition:
+  Agent says (exact):
+    "The slide script is complete. Would you like to proceed to flashcard
+    creation, or skip to close-out?"
+  If YES to flashcards: Set currentPhase = "FLASHCARDS" in session state
+    and proceed to Phase 5.
+  If NO / skip: Set currentPhase = "CLOSEOUT" and proceed to Phase 6.
+
 ------------------------------------------------------------------------
 PHASE 5 — FLASHCARDS (OPTIONAL)
 ------------------------------------------------------------------------
+Entry: Phase 4 complete.
+
 Entry prompt (exact):
   "Would you like to generate flashcards from the approved content?"
 Await: User pastes Flashcard Guide Prompt.
 On receipt: Execute immediately. Generate from approved upstream content.
-On approved: Call dropbox_tool on YES gate.
+
+Step 5.1 — Revision Gate
+  Agent says (exact):
+    "Here are the flashcards for review. Do you want revisions, or are these finalized?"
+  Allowed: Request revisions | Confirm finalized.
+
+Step 5.2 — Dropbox Gate [GATE]
+  Trigger: User confirms flashcards are finalized.
+  Agent says (exact):
+    "Are you ready for me to save these finalized flashcards to Dropbox?"
+  On YES: Call dropbox_tool. File format: .pdf or .xlsx.
+
+Step 5.3 — Monday Gate [GATE]
+  Trigger: Dropbox upload complete.
+  Agent says (exact):
+    "Would you like me to update the Monday task status to reflect that the flashcards are complete?"
+  On YES: Call monday_tool with:
+    - Status: "Flashcards Ready for Review"
+    - Assignee/Person: brian@hockinternational.com
+    - Due Date: today's date + 2 days
+    - Description: Append "Flashcards added/updated: {textbookName} - {section}.
+      Added on {datetime} EST. Source: Generated in Claude project."
+    Search by exact task name; if no match found, do NOT create — ask user.
+    Return: updated item ID, direct link, confirmation of all updated fields.
+  On NO: Note that Monday was not updated.
+
+Phase 5 Exit:
+  Agent says: "The flashcards phase is complete."
+
+Phase 5 → Phase 6 Transition:
+  Set currentPhase = "CLOSEOUT" in session state.
+  Proceed directly to Phase 6 entry.
 
 ------------------------------------------------------------------------
 PHASE 6 — CLOSE-OUT
@@ -489,7 +589,10 @@ Call this tool whenever the user:
   - Confirms Gamma slide creation
   - Requests process close-out
 
-Tool endpoint: POST https://[your-n8n-url]/webhook/hock-agent
+Tool endpoint: POST https://[YOUR_N8N_INSTANCE_URL]/webhook/hock-agent
+NOTE: Replace [YOUR_N8N_INSTANCE_URL] with the actual n8n instance URL before
+activating. Example: https://n8n.hockinternational.com/webhook/hock-agent.
+Kevin configures the bearer token on the webhook node.
 
 Payload structure:
 {
@@ -524,6 +627,7 @@ Status progression (in order):
   "MCQs Ready for Review"          — Phase 2 complete, Dropbox upload confirmed
   "Slides Ready for Review"        — Phase 3 complete, approved
   "Slide Script Ready for Review"  — Phase 4 complete, approved
+  "Flashcards Ready for Review"    — Phase 5 complete, Dropbox upload confirmed (if Phase 5 run)
   "Complete"                       — Phase 6 close-out confirmed
 
 Subtask name pattern:
@@ -587,7 +691,7 @@ Expert content developer creating exam prep materials (textbooks, MCQs, presenta
 - Slide Script: [SCRIPT_NAME].md or .docx
 - Other: Use uploaded files directly (e.g., Gamma exports, monday attachments)
 ## Integrations
-- monday.com connector: Update Content Production board (https://hock-internationalcompany.monday.com/boards/18398486903)
+- monday.com connector: Update Content Production board (https://hock-international-company.monday.com/boards/18398486903)
 - Gamma connector: Create presentations using Hock International Theme
 ## Content Creation Guides
 Always follow the user-specified guide. Do not blend rules.
@@ -625,10 +729,10 @@ PHASE 1 — TEXTBOOK CONTENT CREATION
 Provider: User | Where: Chat | Intent: PROMPT_TEXTBOOK_SECTION
 Purpose: Generate textbook content for specified Section ID.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Create textbook content for [SECTION_ID] from the uploaded syllabus.
 Section: [e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Process:
 1. Confirm prerequisites: Syllabus and standards documents uploaded?
 2. Apply Depth Calibration Skill: Analyze scope, cognitive level, exam weight. Present summary table and recommended depth. Wait for my YES or adjustments.
@@ -643,10 +747,10 @@ Integrate relevant standards from uploaded standards document.
 Provider: User | Where: Chat | Intent: PROMPT_EXPAND
 Purpose: Expand only the specified portion of the textbook. Preserve all else.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Expand the specified part of the previously generated textbook section for this ID. Add content only where described — keep all else identical.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Expansion needed:
 - [Describe what to add, e.g., "Add 2 examples under H2: Emerging Risks"]
 If expansion affects depth, re-apply Depth Calibration Skill briefly and note changes.
@@ -660,10 +764,10 @@ Output full revised section in Markdown.
 Provider: User | Where: Chat | Intent: PROMPT_CONDENSE
 Purpose: Reduce or shorten only specified content.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Condense the specified part of the previously generated textbook section for this ID. Remove/reword only where described — keep all else identical.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Condensation needed:
 - [Describe what to shorten, e.g., "Reduce H3: Data Security by 30%, remove redundant bullets"]
 If condensation affects depth, re-apply Depth Calibration Skill briefly and note changes.
@@ -677,10 +781,10 @@ Output full revised section in Markdown.
 Provider: User | Where: Chat | Intent: PROMPT_REWRITE
 Purpose: Rewrite specified text without changing structure unless stated.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Rewrite the specified part of the previously generated textbook section for this ID. Do not add/remove content unless specified — keep structure identical.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Rewrite needed:
 - [Describe changes, e.g., "Make tone more conversational in intro; fix accuracy in Standard 5.1 reference"]
 Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
@@ -693,10 +797,10 @@ Output full revised section in Markdown.
 Provider: User | Where: Chat | Intent: PROMPT_INSERT_CONTENT
 Purpose: Insert new content at a defined location.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Insert new content into the previously generated textbook section for this ID at the specified location. Do not change existing content.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Insertion needed:
 - [Describe what/where, e.g., "Add new H3: Mitigation Strategies after H2, ~300 words on best practices"]
 Follow Textbook Creation Skills: Prose-dominant, integrate standards naturally.
@@ -709,10 +813,10 @@ Output full revised section in Markdown.
 Provider: User | Where: Chat | Intent: PROMPT_FORMAT_ONLY
 Purpose: Change formatting only. No content edits.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Reformat the specified part of the previously generated textbook section for this ID. Change only formatting — no content additions/removals/rewrites.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Formatting needed:
 - [Describe changes, e.g., "Convert bullets to numbered steps in Process section; fix header levels"]
 Follow Textbook Creation Skills: Use proper hierarchy.
@@ -725,10 +829,10 @@ Output full revised section in Markdown.
 Provider: User | Where: Chat | Intent: PROMPT_FALLBACK_REVISION
 Purpose: Mixed or complex revisions when no specific prompt applies.
 
-You are a HOCK International Content Expert creating exam prep textbooks for internal auditors with 2-4 years experience studying for CIA Part 2.
+You are a HOCK International Content Expert creating exam prep textbooks for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
 Revise the previously generated textbook section for this ID. Edit only what is specified — keep unchanged content exactly as-is.
 Section: [SECTION_ID, e.g., "3c. Cybersecurity Risks"]
-Certification: [CIA Part 2]
+Certification: [CERTIFICATION_NAME]
 Changes needed:
 - [Describe specific change 1, e.g., "Fix tone in intro"]
 - [Describe specific change 2]
@@ -885,7 +989,7 @@ Steps:
 1. Search the board for a task named: [Task Name]
 2. If found, update these columns on that item:
    - Status: "MCQs Ready for Review"
-   - Assignee/Person: [Creator email — replace with actual]
+   - Assignee/Person: brian@hockinternational.com
    - Start Date: today's date
    - Due Date: today's date + 2 days
    - Description (Long Text): Append or update with: "MCQs added/updated: [Textbook Name] - [Section]. Added/updated on [current date and time EST]. Source: Generated in Claude project."
@@ -1050,7 +1154,7 @@ Steps:
 3. Search the monday board for the existing item by Task Name: [Task Name]
 4. If found, update these columns:
    - Status: "Slides Ready for Review"
-   - Assignee/Person: [Creator email — replace with actual]
+   - Assignee/Person: brian@hockinternational.com
    - Due Date: today's date + 2 days
    - Presentation Link: [Gamma share/edit link] (URL/link column)
    - Presentation File: Upload/attach the exported .pptx file (File type column)
@@ -1196,10 +1300,29 @@ PHASE 5 — FLASHCARDS (OPTIONAL)
 Provider: User | Where: Chat | Intent: PROMPT_FLASHCARD_GUIDE
 Purpose: Generate flashcards from approved textbook, MCQs, and slides.
 
-[Flashcard Guide Prompt text — to be defined and inserted here when finalized.
-Generate flashcards from all approved upstream content: textbook, MCQs, and slide outline for the specified section.
-Apply Flashcard_Guide.md for card format and spaced repetition rules.
-Source: Use approved content from this chat session only.]
+Textbook Name: [e.g., CIA Part 2 - Study Unit 3: Risk Management]
+Section: [e.g., "3c. Existing and Emerging Cybersecurity Risks and Data Security"]
+You are a HOCK International Content Expert creating exam prep flashcards for professional certification candidates with 2-4 years of relevant experience studying for [CERTIFICATION_NAME].
+Task: Generate flashcards for the section above using all approved upstream content from this chat.
+Source priority:
+1. Approved textbook section (this chat)
+2. Approved MCQs (this chat)
+3. Approved slide outline (this chat)
+Process:
+1. Apply Depth Calibration Skill: Recommend card count and scope.
+   - Basic: 10-15 cards (key terms and definitions only)
+   - Medium: 20-30 cards (terms, concepts, and application)
+   - Comprehensive: 35-50 cards (full coverage including edge cases and MCQ concepts)
+   Present summary table and wait for YES or adjustments before generating.
+2. Follow Flashcard_Guide.md for card format and spaced repetition rules:
+   - Front: Concise question or term (1-2 lines max)
+   - Back: Answer with brief explanation (2-4 sentences)
+   - Tag each card: [CERT]-[SECTION_ID]-FC-[sequential number, e.g., FC-001]
+   - Difficulty rating per card: 1 (recall) / 2 (application) / 3 (analysis)
+3. Apply Token Optimization Skill: Generate in batches of 15; pause for check after each batch.
+4. Do not duplicate content — cross-reference textbook, MCQs, and slides to ensure complementary coverage. Flashcards should reinforce, not repeat, existing materials.
+5. Output format: Numbered list. Each card clearly labeled Front / Back / Tag / Difficulty.
+Use [CERTIFYING_BODY] terminology. Cite standards briefly by number if relevant.
 
 ------------------------------------------------------------------------
 PHASE 6 — CLOSE-OUT
