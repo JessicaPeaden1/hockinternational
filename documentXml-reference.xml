@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  REFERENCE: How to use the heading styles in documentXml
+
+  The upstream node that generates documentXml should use these paragraph style IDs
+  to get proper heading formatting in the DOCX output.
+
+  Available styles:
+    Heading1         — Study Unit title (e.g. "Study Unit 5: Budgeting — Key Steps")
+    Heading2         — Major section heading (e.g. "The Budgeting Mandate and Organizational Alignment")
+    Heading3         — Sub-section heading
+    Heading4         — Minor sub-heading (bold italic)
+    SectionBanner    — Orange banner (e.g. "Section A")
+    StudyUnitBanner  — Peach box (e.g. "Study Unit 1 — Engagement Objectives and Scope")
+    TOCHeading       — "Table of Contents" label
+    ListBullet       — Bulleted list item (uses numId 1)
+    Normal           — Body text (justified, Calibri 11pt)
+
+  Character styles (apply inside <w:r>):
+    BoldTerm         — Bold key term
+    UnderlineTerm    — Underlined term
+-->
+
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+
+    <!-- ═══ Section Banner ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="SectionBanner"/></w:pPr>
+      <w:r><w:t>Section A</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Study Unit Banner ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="StudyUnitBanner"/></w:pPr>
+      <w:r><w:t>Engagement Planning (50%)</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Heading 1 — Study Unit Title ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
+      <w:r><w:t>Study Unit 5: Budgeting — Key Steps and Considerations</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Normal body paragraph ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Normal"/></w:pPr>
+      <w:r><w:t xml:space="preserve">Budgeting is one of the most consequential management functions a finance professional performs. It is not merely an administrative exercise in projecting numbers — it is the mechanism through which an organization translates its strategy and approved plans into specific resource commitments.</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Heading 2 — Section Heading ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading2"/></w:pPr>
+      <w:r><w:t>The Budgeting Mandate and Organizational Alignment</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Body with bold key term ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Normal"/></w:pPr>
+      <w:r><w:t xml:space="preserve">Every organization that operates with a formal plan requires a budget. The </w:t></w:r>
+      <w:r>
+        <w:rPr><w:rStyle w:val="BoldTerm"/></w:rPr>
+        <w:t>budget</w:t>
+      </w:r>
+      <w:r><w:t xml:space="preserve"> is not an optional planning tool or a rough estimate of anticipated costs.</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Body with underlined term ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Normal"/></w:pPr>
+      <w:r><w:t xml:space="preserve">The foundation of every successful internal audit engagement </w:t></w:r>
+      <w:r>
+        <w:rPr><w:rStyle w:val="UnderlineTerm"/></w:rPr>
+        <w:t>rests</w:t>
+      </w:r>
+      <w:r><w:t xml:space="preserve"> on well-defined objectives and appropriately established scope.</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Heading 3 — Sub-section ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading3"/></w:pPr>
+      <w:r><w:t>1a. Applying Topical Requirements</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Bullet list items ═══ -->
+    <w:p>
+      <w:pPr><w:pStyle w:val="ListBullet"/></w:pPr>
+      <w:r>
+        <w:rPr><w:b/></w:rPr>
+        <w:t>Section A:</w:t>
+      </w:r>
+      <w:r><w:t xml:space="preserve"> Engagement Planning (50%)</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:pStyle w:val="ListBullet"/></w:pPr>
+      <w:r>
+        <w:rPr><w:b/></w:rPr>
+        <w:t>Section B:</w:t>
+      </w:r>
+      <w:r><w:t xml:space="preserve"> Information Gathering, Analysis and Evaluation (40%)</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:pStyle w:val="ListBullet"/></w:pPr>
+      <w:r>
+        <w:rPr><w:b/></w:rPr>
+        <w:t>Section C:</w:t>
+      </w:r>
+      <w:r><w:t xml:space="preserve"> Engagement Supervision and Communication (10%)</w:t></w:r>
+    </w:p>
+
+    <!-- ═══ Page break before new section ═══ -->
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="SectionBanner"/>
+        <w:pageBreakBefore/>
+      </w:pPr>
+      <w:r><w:t>Section B</w:t></w:r>
+    </w:p>
+
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"
+               w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>
